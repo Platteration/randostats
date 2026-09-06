@@ -1,0 +1,375 @@
+/* randostats front end: plain JS, hand-drawn SVG charts, no build step. */
+(() => {
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const NS = "http://www.w3.org/2000/svg";
+  const fmt = (n) => n.toLocaleString();
+  const tip = $("#tooltip");
+  const state = { contacts: [], tables: new Set(), llm: false, session: null };
+
+  const api = async (path, opts) => {
+    const r = await fetch(path, opts);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return r.json();
+  };
+
+  // ---------- tiny SVG helpers ----------
+  const el = (tag, attrs = {}, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  const showTip = (evt, html) => { tip.innerHTML = html; tip.hidden = false; moveTip(evt); };
+  const moveTip = (evt) => { tip.style.left = (evt.clientX + 14) + "px"; tip.style.top = (evt.clientY + 14) + "px"; };
+  const hideTip = () => { tip.hidden = true; };
+  const hover = (node, html) => {
+    node.addEventListener("mouseenter", (e) => showTip(e, html));
+    node.addEventListener("mousemove", moveTip);
+    node.addEventListener("mouseleave", hideTip);
+  };
+  const niceMax = (v) => { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p; const n = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(c => m <= c); return n * p; };
+  const roundedTop = (x, y, w, h, r) => { r = Math.min(r, w / 2, h); return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`; };
+  const roundedRight = (x, y, w, h, r) => { r = Math.min(r, h / 2, w); return `M${x},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x} Z`; };
+
+  // Horizontal stacked bars (two series) with a direct total label at the tip.
+  function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150 }) {
+    container.innerHTML = "";
+    if (!rows.length) { container.innerHTML = '<div class="empty">Nothing here yet. Import some messages.</div>'; return; }
+    const right = 70, rowH = 30, barH = 22, top = 8, maxChars = Math.floor(labelW / 7);
+    const width = Math.max(600, container.clientWidth || 600), plotW = width - labelW - right;
+    const max = niceMax(Math.max(...rows.map(r => series.reduce((a, s) => a + r[s], 0))));
+    const svg = el("svg", { viewBox: `0 0 ${width} ${top + rows.length * rowH + 24}`, width, role: "img" });
+    const grid = el("g", { class: "grid" });
+    for (let i = 0; i <= 4; i++) {
+      const x = labelW + plotW * i / 4;
+      grid.appendChild(el("line", { x1: x, x2: x, y1: top, y2: top + rows.length * rowH }));
+      svg.appendChild(el("text", { x, y: top + rows.length * rowH + 16, "text-anchor": "middle", class: "tick" }, fmt(max * i / 4)));
+    }
+    svg.appendChild(grid);
+    rows.forEach((r, i) => {
+      const y = top + i * rowH + (rowH - barH) / 2;
+      const g = el("g", { class: "slot" });
+      g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+      let x = labelW;
+      const total = series.reduce((a, s) => a + r[s], 0);
+      series.forEach((s, j) => {
+        const w = plotW * r[s] / max;
+        if (w <= 0) return;
+        const last = j === series.length - 1 || series.slice(j + 1).every(t => r[t] === 0);
+        const gap = j > 0 ? 2 : 0;
+        const d = last ? roundedRight(x + gap, y, Math.max(0, w - gap), barH, 4) : `M${x + gap},${y} H${x + w} V${y + barH} H${x + gap} Z`;
+        g.appendChild(el("path", { d, class: `bar ${colors[j]}` }));
+        x += w;
+      });
+      g.appendChild(el("text", { x: x + 6, y: y + barH / 2 + 4, class: "val" }, fmt(total)));
+      const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
+      hover(hit, tipFn ? tipFn(r) : `<b>${r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      g.appendChild(hit);
+      svg.appendChild(g);
+    });
+    container.appendChild(svg);
+    container._table = () => table(series.length > 1 ? [key, ...series, "total"] : [key, ...series], rows.map(r => ({ ...r, total: series.reduce((a, s) => a + r[s], 0) })), [keyLabel || key, ...labels, "Total"]);
+  }
+
+  // Vertical stacked columns (two series) on a categorical x axis.
+  function columns(container, rows, { key, series, labels, colors = ["s1", "s2"], xLabel }) {
+    container.innerHTML = "";
+    if (!rows.length || !rows.some(r => series.some(s => r[s] > 0))) { container.innerHTML = '<div class="empty">No data.</div>'; return; }
+    const width = Math.max(420, container.clientWidth || 420), height = 220, left = 44, bottom = 28, top = 10, right = 8;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const max = niceMax(Math.max(...rows.map(r => series.reduce((a, s) => a + r[s], 0))));
+    const slot = plotW / rows.length, barW = Math.min(24, slot * 0.7);
+    const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, role: "img" });
+    const grid = el("g", { class: "grid" });
+    for (let i = 0; i <= 4; i++) {
+      const y = top + plotH - plotH * i / 4;
+      grid.appendChild(el("line", { x1: left, x2: left + plotW, y1: y, y2: y }));
+      svg.appendChild(el("text", { x: left - 6, y: y + 4, "text-anchor": "end", class: "tick" }, fmt(max * i / 4)));
+    }
+    svg.appendChild(grid);
+    svg.appendChild(el("g", { class: "axis" })).appendChild(el("line", { x1: left, x2: left + plotW, y1: top + plotH, y2: top + plotH }));
+    const every = Math.ceil(rows.length / 12);
+    rows.forEach((r, i) => {
+      const x0 = left + i * slot + (slot - barW) / 2;
+      const g = el("g", { class: "slot" });
+      let y = top + plotH;
+      series.forEach((s, j) => {
+        const h = plotH * r[s] / max;
+        if (h <= 0) return;
+        const last = series.slice(j + 1).every(t => r[t] === 0);
+        const gap = j > 0 ? 2 : 0;
+        const d = last ? roundedTop(x0, y - h, barW, Math.max(0, h - gap), 4) : `M${x0},${y - h} H${x0 + barW} V${y - gap} H${x0} Z`;
+        g.appendChild(el("path", { d, class: `bar ${colors[j]}` }));
+        y -= h;
+      });
+      if (i % every === 0) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
+      const hit = el("rect", { x: left + i * slot, y: top, width: slot, height: plotH, class: "hit" });
+      hover(hit, `<b>${xLabel ? xLabel(r) : r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      g.appendChild(hit);
+      svg.appendChild(g);
+    });
+    container.appendChild(svg);
+    container._table = () => table([key, ...series], rows, [key[0].toUpperCase() + key.slice(1), ...labels]);
+  }
+
+  // Single-series line with a wash and a crosshair tooltip.
+  function line(container, rows, { key, value, label }) {
+    container.innerHTML = "";
+    if (rows.length < 2) { container.innerHTML = '<div class="empty">Need at least two months of messages.</div>'; return; }
+    const width = Math.max(600, container.clientWidth || 600), height = 220, left = 48, bottom = 28, top = 12, right = 16;
+    const plotW = width - left - right, plotH = height - top - bottom;
+    const max = niceMax(Math.max(...rows.map(r => r[value])));
+    const X = (i) => left + plotW * i / (rows.length - 1), Y = (v) => top + plotH - plotH * v / max;
+    const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, role: "img" });
+    const grid = el("g", { class: "grid" });
+    for (let i = 0; i <= 4; i++) {
+      const y = top + plotH - plotH * i / 4;
+      grid.appendChild(el("line", { x1: left, x2: left + plotW, y1: y, y2: y }));
+      svg.appendChild(el("text", { x: left - 6, y: y + 4, "text-anchor": "end", class: "tick" }, fmt(max * i / 4)));
+    }
+    svg.appendChild(grid);
+    const pts = rows.map((r, i) => `${X(i)},${Y(r[value])}`);
+    svg.appendChild(el("path", { class: "area", d: `M${X(0)},${top + plotH} L${pts.join(" L")} L${X(rows.length - 1)},${top + plotH} Z` }));
+    svg.appendChild(el("path", { class: "line", d: `M${pts.join(" L")}` }));
+    const every = Math.ceil(rows.length / 10);
+    rows.forEach((r, i) => { const last = i === rows.length - 1; if ((i % every === 0 && (!every || i < rows.length - every / 2)) || last) svg.appendChild(el("text", { x: X(i), y: height - 8, "text-anchor": last ? "end" : i === 0 ? "start" : "middle", class: "tick" }, r[key])); });
+    const lastI = rows.length - 1;
+    svg.appendChild(el("circle", { cx: X(lastI), cy: Y(rows[lastI][value]), r: 4, class: "dot" }));
+    svg.appendChild(el("text", { x: X(lastI) - 8, y: Y(rows[lastI][value]) - 8, "text-anchor": "end", class: "val" }, fmt(rows[lastI][value])));
+    const cross = el("line", { class: "cross", y1: top, y2: top + plotH, x1: -10, x2: -10 });
+    const dot = el("circle", { r: 4, class: "dot", cx: -10, cy: -10 });
+    svg.appendChild(cross); svg.appendChild(dot);
+    const hit = el("rect", { x: left, y: top, width: plotW, height: plotH, class: "hit" });
+    hit.addEventListener("mousemove", (e) => {
+      const rect = svg.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * width / rect.width;
+      const i = Math.max(0, Math.min(lastI, Math.round((px - left) / plotW * lastI)));
+      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(rows[i][value]));
+      showTip(e, `<b>${rows[i][key]}</b><br>${label}: ${fmt(rows[i][value])}`);
+    });
+    hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("x1", -10); cross.setAttribute("x2", -10); dot.setAttribute("cx", -10); });
+    svg.appendChild(hit);
+    container.appendChild(svg);
+    container._table = () => table([key, value], rows, ["Month", label]);
+  }
+
+  // 7 x 24 heatmap on the sequential blue ramp.
+  function heatmap(container, grid) {
+    container.innerHTML = "";
+    const max = Math.max(1, ...grid.flat());
+    if (max <= 1 && !grid.flat().some(v => v > 0)) { container.innerHTML = '<div class="empty">No data.</div>'; return; }
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const cell = 30, gap = 2, left = 40, top = 22, width = left + 24 * (cell + gap), height = top + 7 * (cell + gap);
+    const steps = ["--seq-100", "--seq-200", "--seq-300", "--seq-400", "--seq-500", "--seq-600", "--seq-700"];
+    const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, role: "img" });
+    for (let h = 0; h < 24; h += 3) svg.appendChild(el("text", { x: left + h * (cell + gap) + cell / 2, y: 14, "text-anchor": "middle", class: "tick" }, `${h}h`));
+    grid.forEach((row, d) => {
+      svg.appendChild(el("text", { x: left - 8, y: top + d * (cell + gap) + cell / 2 + 4, "text-anchor": "end", class: "tick" }, days[d]));
+      row.forEach((v, h) => {
+        const idx = v === 0 ? -1 : Math.min(steps.length - 1, Math.floor(Math.sqrt(v / max) * steps.length));
+        const rect = el("rect", { x: left + h * (cell + gap), y: top + d * (cell + gap), width: cell, height: cell, rx: 3, fill: idx < 0 ? "var(--grid)" : `var(${steps[idx]})` });
+        hover(rect, `<b>${days[d]} ${h}:00–${h + 1}:00</b><br>${fmt(v)} messages`);
+        svg.appendChild(rect);
+      });
+    });
+    container.appendChild(svg);
+  }
+
+  function sparkline(values, w = 96, h = 20) {
+    const max = Math.max(1, ...values);
+    const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * (h - 2) - 1}`);
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${pts.join(" L")}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"/></svg>`;
+  }
+
+  function table(cols, rows, labels) {
+    const head = cols.map((c, i) => `<th class="${typeof rows[0]?.[c] === "number" ? "num" : ""}">${labels[i] || c}</th>`).join("");
+    const body = rows.map(r => `<tr>${cols.map(c => `<td class="${typeof r[c] === "number" ? "num" : ""}">${typeof r[c] === "number" ? fmt(r[c]) : r[c]}</td>`).join("")}</tr>`).join("");
+    const t = document.createElement("table"); t.className = "data"; t.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`; return t;
+  }
+  const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+
+  // Table / chart toggle buttons.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-toggle-table]");
+    if (!btn) return;
+    const id = btn.dataset.toggleTable, c = $("#" + id);
+    if (state.tables.has(id)) { state.tables.delete(id); btn.textContent = "Table"; render[id.split("-")[0]]?.(); }
+    else if (c._table) { state.tables.add(id); btn.textContent = "Chart"; c.innerHTML = ""; c.appendChild(c._table()); }
+  });
+  const chartOrTable = (id, draw) => { const c = $("#" + id); draw(c); if (state.tables.has(id) && c._table) { c.innerHTML = ""; c.appendChild(c._table()); } };
+
+  // ---------- renderers ----------
+  const render = {};
+  render.people = async () => {
+    const [ov, rows] = await Promise.all([api("/api/stats/overview"), api("/api/stats/contacts")]);
+    const lim = +$("#people-limit").value;
+    $("#kpis").innerHTML = ov.total ? [
+      kpi("Messages", fmt(ov.total), `${fmt(ov.sent)} sent · ${fmt(ov.received)} received`),
+      kpi("People", fmt(ov.contacts)),
+      kpi("Per day", ov.per_day, `over ${fmt(ov.days)} days`),
+      kpi("You wrote", `${Math.round(100 * ov.sent / ov.total)}%`, "of all messages"),
+      kpi("Range", `${ov.first.slice(0, 10)}`, `to ${ov.last.slice(0, 10)}`),
+    ].join("") : kpi("Messages", "0", "import something to get started");
+    const shown = lim ? rows.slice(0, lim) : rows;
+    chartOrTable("people-chart", (c) => hbars(c, shown, {
+      key: "contact", keyLabel: "Person", series: ["sent", "received"], labels: ["Sent by you", "Received"],
+      tipFn: (r) => `<b>${r.contact}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%`,
+    }));
+    const wordy = [...shown].sort((a, b) => b.avg_words_received - a.avg_words_received).slice(0, 12);
+    hbars($("#people-words"), wordy, { key: "contact", series: ["avg_words_received"], labels: ["Average words per message"], colors: ["s2"],
+      tipFn: (r) => `<b>${r.contact}</b><br>Their average: ${r.avg_words_received} words<br>Your average to them: ${r.avg_words_sent} words` });
+  };
+
+  render.hour = render.weekday = render.month = render.timing = async () => {
+    const contact = $("#timing-contact").value;
+    const t = await api("/api/stats/timing" + (contact ? `?contact=${encodeURIComponent(contact)}` : ""));
+    const lat = t.reply_latency;
+    $("#timing-summary").textContent = t.by_hour.length ? `Peak: ${t.peak_weekday} around ${t.peak_hour}:00 · busiest day ${t.busiest_day.date} (${t.busiest_day.count})` +
+      (lat && lat.you_median_minutes != null ? ` · you reply in ~${lat.you_median_minutes} min, they take ~${lat.them_median_minutes ?? "?"} min` : "") : "";
+    chartOrTable("hour-chart", (c) => columns(c, t.by_hour, { key: "hour", series: ["sent", "received"], labels: ["Sent by you", "Received"], xLabel: (r) => `${r.hour}h` }));
+    chartOrTable("weekday-chart", (c) => columns(c, t.by_weekday, { key: "weekday", series: ["sent", "received"], labels: ["Sent by you", "Received"] }));
+    heatmap($("#heatmap"), t.heatmap.length ? t.heatmap : Array.from({ length: 7 }, () => Array(24).fill(0)));
+    chartOrTable("month-chart", (c) => line(c, t.by_month, { key: "month", value: "count", label: "Messages" }));
+    const peaks = await api("/api/stats/timing/contacts?limit=15");
+    $("#peaks").innerHTML = peaks.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Messages</th><th>Peak day</th><th>Peak hour</th><th>Hours 0–23</th></tr></thead><tbody>` +
+      peaks.map(p => `<tr><td>${p.contact}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour)}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
+  };
+
+  render.spell = render.spelling = async () => {
+    const dir = $("#spell-direction").value, contact = $("#spell-contact").value;
+    const s = await api(`/api/stats/misspellings?direction=${dir}&limit=30` + (contact ? `&contact=${encodeURIComponent(contact)}` : ""));
+    $("#spell-kpis").innerHTML = [
+      kpi("Words checked", fmt(s.words_checked)),
+      kpi("Misspellings", fmt(s.misspelled_total), `${s.unique} distinct words`),
+      kpi("Per 1,000 words", s.rate_per_1000),
+    ].join("");
+    chartOrTable("spell-chart", (c) => hbars(c, s.words.map(w => ({ ...w, label: w.suggestion ? `${w.word} → ${w.suggestion}` : w.word })), {
+      key: "label", keyLabel: "Word", labelW: 230, series: ["count"], labels: ["Times"], tipFn: (w) => `<b>${w.word}</b>${w.suggestion ? ` → ${w.suggestion}` : ""}<br>${fmt(w.count)} times<br><i>${w.example.replace(/</g, "&lt;")}</i>`,
+    }));
+    const rows = dir === "sent" ? s.by_contact : s.by_sender, k = dir === "sent" ? "contact" : "sender";
+    $("#spell-by-title").textContent = dir === "sent" ? "Who you misspell things to" : "Who misspells the most";
+    $("#spell-by").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Misspellings</th><th>Favourites</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${r[k]}</td><td class="num">${fmt(r.misspelled)}</td><td>${r.top.join(", ")}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
+  };
+
+  render.words = async () => {
+    const dir = $("#words-direction").value;
+    const rows = await api(`/api/stats/words?limit=30` + (dir ? `&direction=${dir}` : ""));
+    chartOrTable("words-chart", (c) => hbars(c, rows, { key: "word", keyLabel: "Word", series: ["count"], labels: ["Times"] }));
+  };
+
+  // ---------- counterpoint ----------
+  const esc = (s) => String(s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+  function renderCounter(payload, { prepend = false } = {}) {
+    const box = $("#counter-results");
+    if (!payload.results.length && !prepend) { box.innerHTML = '<div class="empty">No number in there. Try "70% of people…", "1 in 5…", "most people…", or "3 times more likely".</div>'; return; }
+    const groups = {};
+    for (const r of payload.results) (groups[r.claim.key] ||= []).push(r);
+    const html = Object.entries(groups).map(([key, rs]) => {
+      const llm = payload.llm?.[key];
+      const chosen = llm ? rs.find(r => r.fact.id === llm.fact_id) || rs[0] : rs[0];
+      const others = rs.filter(r => r !== chosen);
+      return `<div class="cp ${llm ? "llm" : ""}">
+        <div class="claim">They said <b>“${esc(rs[0].claim.raw)}”</b>${llm ? '<span class="badge">Claude</span>' : ""}</div>
+        <div class="punch">${esc(llm ? llm.punchline : chosen.lines[0])}</div>
+        <div class="fact">${esc(chosen.fact.statement)}.</div>
+        <div class="src">${esc(chosen.fact.source)}, ${chosen.fact.year} · ${chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
+        ${others.map(o => `<div class="fact" style="margin-top:6px">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${o.fact.year})</span></div>`).join("")}
+        <div class="gap"><b>The actual problem:</b> ${esc(llm ? llm.logic_gap : chosen.fallacy)}</div>
+      </div>`;
+    }).join("");
+    if (prepend) box.insertAdjacentHTML("afterbegin", html); else box.innerHTML = html;
+  }
+  async function counter(text, { live = false } = {}) {
+    if (!text.trim()) return;
+    if (live && !state.session) state.session = (await api("/api/counterpoint/session", { method: "POST" })).session;
+    const payload = await api("/api/counterpoint", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, session: live ? state.session : null, llm: $("#counter-llm").checked }) });
+    if (live) { if (payload.results.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
+  }
+  $("#counter-go").addEventListener("click", () => counter($("#counter-text").value));
+  $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value); });
+  $("#counter-random").addEventListener("click", async () => {
+    const p = await api("/api/counterpoint/random");
+    $("#counter-results").insertAdjacentHTML("afterbegin", `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>
+      <div class="src">${esc(p.a.source)}, ${p.a.year} · ${esc(p.b.source)}, ${p.b.year}</div><div class="gap"><b>The actual problem:</b> two numbers being close is not a relationship. It is arithmetic.</div></div>`);
+  });
+
+  // Live listening via the Web Speech API (Chrome, Edge, Safari).
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, listening = false, finalText = "";
+  const listenBtn = $("#counter-listen");
+  if (!SR) { listenBtn.disabled = true; listenBtn.title = "Speech recognition needs Chrome, Edge, or Safari"; }
+  listenBtn.addEventListener("click", () => {
+    if (listening) { listening = false; rec.stop(); return; }
+    rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = navigator.language || "en-US";
+    finalText = ""; state.session = null;
+    $("#transcript").hidden = false; $("#transcript").textContent = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) { finalText += t + " "; counter(t, { live: true }); } else interim += t;
+      }
+      $("#transcript").textContent = finalText + interim;
+    };
+    rec.onend = () => { if (listening) { try { rec.start(); } catch { /* restarted too fast */ } } else { listenBtn.classList.remove("listening"); listenBtn.textContent = "🎙 Listen"; $("#listen-state").textContent = ""; } };
+    rec.onerror = (e) => { $("#listen-state").textContent = e.error === "not-allowed" ? "microphone blocked" : `mic: ${e.error}`; if (e.error === "not-allowed") listening = false; };
+    listening = true; listenBtn.classList.add("listening"); listenBtn.textContent = "■ Stop"; $("#listen-state").textContent = "listening… say a statistic";
+    rec.start();
+  });
+
+  // ---------- import ----------
+  $("#import-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    $("#import-result").textContent = "importing…";
+    try {
+      const r = await api("/api/import", { method: "POST", body: fd });
+      $("#import-result").textContent = `Parsed ${fmt(r.parsed)} messages as ${r.format}, ${fmt(r.added)} new. ${fmt(r.total)} total. Contacts: ${r.contacts.slice(0, 8).join(", ")}${r.contacts.length > 8 ? "…" : ""}`;
+      await refresh();
+    } catch (err) { $("#import-result").textContent = "Import failed: " + err.message; }
+  });
+  $("#load-sample").addEventListener("click", async () => {
+    $("#import-result").textContent = "loading sample…";
+    try {
+      const blob = await (await fetch("/samples/sample_messages.json")).blob();
+      const fd = new FormData(); fd.append("file", blob, "sample_messages.json"); fd.append("self_name", "Sam"); fd.append("fmt", "json");
+      const r = await api("/api/import", { method: "POST", body: fd });
+      $("#self-name").value = "Sam";
+      $("#import-result").textContent = `Sample loaded: ${fmt(r.parsed)} messages between Sam and ${r.contacts.join(", ")}.`;
+      await refresh(); switchTab("people");
+    } catch (err) { $("#import-result").textContent = "Sample not available: " + err.message; }
+  });
+  $("#clear-all").addEventListener("click", async () => {
+    if (!confirm("Delete every imported message from the local database?")) return;
+    await api("/api/messages", { method: "DELETE" }); $("#import-result").textContent = "Cleared."; await refresh();
+  });
+
+  // ---------- tabs & refresh ----------
+  const switchTab = (name) => {
+    $$(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+    $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
+    location.hash = name;
+    (render[name] || (() => {}))();
+  };
+  $$(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction"].forEach(id => $("#" + id).addEventListener("change", () => switchTab(location.hash.slice(1) || "people")));
+
+  async function refresh() {
+    const st = await api("/api/status");
+    state.llm = st.llm; $("#llm-label").hidden = !st.llm;
+    $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
+    if (st.self_name) $("#self-name").value = st.self_name;
+    const contacts = st.messages ? await api("/api/stats/contacts") : [];
+    for (const id of ["timing-contact", "spell-contact"]) {
+      const sel = $("#" + id), cur = sel.value;
+      sel.innerHTML = '<option value="">Everyone</option>' + contacts.map(c => `<option value="${esc(c.contact)}">${esc(c.contact)} (${fmt(c.total)})</option>`).join("");
+      sel.value = cur;
+    }
+    const tab = location.hash.slice(1);
+    switchTab(tab && $("#tab-" + tab) ? tab : (st.messages ? "people" : "import"));
+  }
+  refresh().catch(err => { $("#status").textContent = "backend unreachable: " + err.message; });
+})();

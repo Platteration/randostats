@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>randostats</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">%</span> randostats</div>
+  <nav class="tabs" role="tablist">
+    <button data-tab="people" class="active">People</button>
+    <button data-tab="timing">Timing</button>
+    <button data-tab="spelling">Spelling</button>
+    <button data-tab="words">Words</button>
+    <button data-tab="counter">Counterpoint</button>
+    <button data-tab="import">Import</button>
+  </nav>
+  <div class="status" id="status">loading…</div>
+</header>
+
+<main>
+  <section id="tab-people" class="tab active">
+    <div class="kpis" id="kpis"></div>
+    <div class="card">
+      <div class="card-head"><h2>Messages per person</h2>
+        <div class="controls"><label>Show <select id="people-limit"><option>10</option><option selected>20</option><option>50</option><option value="0">all</option></select></label>
+        <button class="ghost" data-toggle-table="people-chart">Table</button></div></div>
+      <div class="legend"><span><i class="sw s1"></i>Sent by you</span><span><i class="sw s2"></i>Received</span></div>
+      <div id="people-chart" class="chart"></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>Who writes the longest messages</h2><span class="muted">average words per message they send you</span></div><div id="people-words" class="chart"></div></div>
+  </section>
+
+  <section id="tab-timing" class="tab">
+    <div class="filters"><label>Person <select id="timing-contact"><option value="">Everyone</option></select></label><span id="timing-summary" class="muted"></span></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Hour of day</h2><button class="ghost" data-toggle-table="hour-chart">Table</button></div>
+        <div class="legend"><span><i class="sw s1"></i>Sent by you</span><span><i class="sw s2"></i>Received</span></div>
+        <div id="hour-chart" class="chart"></div></div>
+      <div class="card"><div class="card-head"><h2>Day of week</h2><button class="ghost" data-toggle-table="weekday-chart">Table</button></div>
+        <div class="legend"><span><i class="sw s1"></i>Sent by you</span><span><i class="sw s2"></i>Received</span></div>
+        <div id="weekday-chart" class="chart"></div></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>When conversations happen</h2><span class="muted">weekday × hour, darker is busier</span></div><div id="heatmap" class="chart"></div></div>
+    <div class="card"><div class="card-head"><h2>Volume over time</h2><button class="ghost" data-toggle-table="month-chart">Table</button></div><div id="month-chart" class="chart"></div></div>
+    <div class="card"><div class="card-head"><h2>Each person's favourite time to talk</h2></div><div id="peaks"></div></div>
+  </section>
+
+  <section id="tab-spelling" class="tab">
+    <div class="filters">
+      <label>Whose typos <select id="spell-direction"><option value="sent">Yours</option><option value="received">Everyone else's</option></select></label>
+      <label>Person <select id="spell-contact"><option value="">Everyone</option></select></label>
+    </div>
+    <div class="kpis" id="spell-kpis"></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Most frequent misspellings</h2><button class="ghost" data-toggle-table="spell-chart">Table</button></div><div id="spell-chart" class="chart"></div></div>
+      <div class="card"><div class="card-head"><h2 id="spell-by-title">By person</h2></div><div id="spell-by"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-words" class="tab">
+    <div class="filters"><label>Direction <select id="words-direction"><option value="">Both</option><option value="sent">Sent by you</option><option value="received">Received</option></select></label></div>
+    <div class="card"><div class="card-head"><h2>Most used words</h2><button class="ghost" data-toggle-table="words-chart">Table</button></div><div id="words-chart" class="chart"></div></div>
+  </section>
+
+  <section id="tab-counter" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Counterpoint</h2><span class="muted">Say a statistic. Get one just as true and just as irrelevant.</span></div>
+      <div class="counter-input">
+        <textarea id="counter-text" rows="3" placeholder="e.g. seventy percent of people drink beer, so it's obviously fine"></textarea>
+        <div class="row">
+          <button id="counter-go" class="primary">Counter it</button>
+          <button id="counter-listen" class="ghost">🎙 Listen</button>
+          <button id="counter-random" class="ghost">Random spurious correlation</button>
+          <label class="muted" id="llm-label" hidden><input type="checkbox" id="counter-llm" checked> sharpen with Claude</label>
+          <span id="listen-state" class="muted"></span>
+        </div>
+        <div id="transcript" class="transcript" hidden></div>
+      </div>
+    </div>
+    <div id="counter-results" class="results"></div>
+  </section>
+
+  <section id="tab-import" class="tab">
+    <div class="card">
+      <div class="card-head"><h2>Import messages</h2></div>
+      <form id="import-form" class="import-form">
+        <label>Your name in the export <input name="self_name" id="self-name" required placeholder="exactly as it appears"></label>
+        <label>Format <select name="fmt" id="fmt"><option value="auto">Auto-detect</option><option value="whatsapp">WhatsApp export (.txt)</option><option value="imessage">iMessage chat.db</option><option value="smsbackup">SMS Backup &amp; Restore (.xml)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+        <label id="contact-label">Contact name (WhatsApp group exports only) <input name="contact" placeholder="optional"></label>
+        <label>File <input type="file" name="file" id="file" required></label>
+        <button class="primary" type="submit">Import</button>
+        <button class="ghost" type="button" id="load-sample">Load sample data</button>
+        <button class="ghost danger" type="button" id="clear-all">Delete all imported messages</button>
+      </form>
+      <div id="import-result" class="muted"></div>
+      <details class="help">
+        <summary>How to export your messages</summary>
+        <ul>
+          <li><b>WhatsApp</b>: open a chat → ⋮ → More → Export chat → Without media. One file per chat; import each one.</li>
+          <li><b>iMessage (Mac)</b>: import <code>~/Library/Messages/chat.db</code> (grant Full Disk Access to your terminal or browser first). Everything comes in at once.</li>
+          <li><b>Android SMS</b>: the "SMS Backup &amp; Restore" app writes an XML file; import it directly.</li>
+          <li><b>Anything else</b>: a CSV or JSON with columns <code>contact, sender, direction, timestamp, text</code>.</li>
+        </ul>
+        <p>Everything stays on this machine in a local SQLite file. Nothing is uploaded anywhere.</p>
+      </details>
+    </div>
+  </section>
+</main>
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

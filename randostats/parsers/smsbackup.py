@@ -1,0 +1,51 @@
+"""Parser for Android "SMS Backup & Restore" XML files.
+
+Elements look like ``<sms address="+15551234567" date="1700000000000" type="1"
+body="hi" contact_name="Alice" />`` where ``type`` 1 is received and 2 is sent.
+MMS entries carry their text in nested ``<part ct="text/plain" text="..."/>``.
+"""
+
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from typing import Iterable
+
+from ..models import Message
+
+
+def _ts(ms: str | None) -> datetime | None:
+    if not ms:
+        return None
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+    except (ValueError, OverflowError):
+        return None
+
+
+def parse(data: bytes, self_name: str) -> Iterable[Message]:
+    root = ET.fromstring(data)
+    for el in root.iter():
+        if el.tag == "sms":
+            ts = _ts(el.get("date"))
+            body = el.get("body") or ""
+            if ts is None or not body:
+                continue
+            sent = el.get("type") == "2"
+            contact = el.get("contact_name") or el.get("address") or "Unknown"
+            if contact == "(Unknown)":
+                contact = el.get("address") or "Unknown"
+            yield Message(contact=contact, sender=self_name if sent else contact,
+                          direction="sent" if sent else "received", timestamp=ts, text=body, source="sms")
+        elif el.tag == "mms":
+            ts = _ts(el.get("date"))
+            texts = [p.get("text") or "" for p in el.iter("part") if (p.get("ct") or "").startswith("text/plain")]
+            body = "\n".join(t for t in texts if t).strip()
+            if ts is None or not body:
+                continue
+            sent = el.get("msg_box") == "2"
+            contact = el.get("contact_name") or el.get("address") or "Unknown"
+            if contact == "(Unknown)":
+                contact = el.get("address") or "Unknown"
+            yield Message(contact=contact, sender=self_name if sent else contact,
+                          direction="sent" if sent else "received", timestamp=ts, text=body, source="mms")
