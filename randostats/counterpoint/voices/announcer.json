@@ -1,0 +1,29 @@
+{
+  "id": "announcer",
+  "name": "Sports announcer",
+  "description": "Same statistics, considerably more shouting.",
+  "percent": [
+    "OH, THAT'S A BIG NUMBER! But folks, {fact_lc}! SAME FIGURE! COMPLETELY UNRELATED! The crowd goes quiet!",
+    "And here comes the counter! {fact}! Within {gap} of that claim! Does it prove anything? IT DOES NOT!",
+    "{fact}! Ladies and gentlemen, by that logic {subject_or_that} is brought to you by {short}!",
+    "WHAT A STATISTIC! And equally true: {fact_lc}! Two numbers, one coincidence, zero evidence!"
+  ],
+  "ratio": [
+    "A MULTIPLIER! And what a comparison: {fact_lc}! Still no baseline in sight!",
+    "{fact}! {fact_v} times WHAT, though? That's the question nobody's answering!",
+    "He's going for the ratio! But {fact_lc}, and the scoreboard remains unchanged!"
+  ],
+  "fallacy_percent": [
+    "NO BASE RATE! You cannot run that play without telling us the rate among everyone else!",
+    "That's a correlation wearing a causation jersey, and the officials have seen it!",
+    "{v}% of people doing something tells you about the people, NOT about the thing!"
+  ],
+  "fallacy_vague": [
+    "'MOST PEOPLE' is not a number! Where's the sample? Where's the year?",
+    "Appeal to the crowd! And the crowd, folks, is not a source!"
+  ],
+  "fallacy_ratio": [
+    "{v} TIMES MORE LIKELY! From what to what? One in a million to {v} in a million is still nothing!",
+    "A multiplier with no baseline! That's a foul in every league!"
+  ]
+}

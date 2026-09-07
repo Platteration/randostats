@@ -1,0 +1,19 @@
+{
+  "id": "money",
+  "name": "Money",
+  "description": "Household finance and economics, for arguments about what people can afford.",
+  "facts": [
+    {"id": "mn-400", "kind": "percent", "value": 37, "statement": "About 37% of American adults could not cover a $400 emergency expense with cash", "short": "the share of Americans without $400 spare", "source": "US Federal Reserve, Survey of Household Economics", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-card", "kind": "percent", "value": 82, "statement": "About 82% of American adults have a credit card", "short": "the share of Americans holding a credit card", "source": "US Federal Reserve, Survey of Household Economics", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-apr", "kind": "percent", "value": 21, "statement": "The average credit card interest rate in the US is about 21%", "short": "what a credit card charges", "source": "US Federal Reserve G.19", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-consumer", "kind": "percent", "value": 68, "statement": "Consumer spending is about 68% of US economic output", "short": "the share of the US economy that is people buying things", "source": "US Bureau of Economic Analysis", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-cash", "kind": "percent", "value": 16, "statement": "Only about 16% of US payments are made in cash", "short": "the share of payments still made in cash", "source": "Federal Reserve Diary of Consumer Payment Choice", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-top1", "kind": "percent", "value": 31, "statement": "The wealthiest 1% of US households hold about 31% of the country's wealth", "short": "the share of wealth held by the top one percent", "source": "Federal Reserve Distributional Financial Accounts", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-poverty", "kind": "percent", "value": 9, "statement": "About 9% of the world's population lives on less than $2.15 a day", "short": "the share of humanity in extreme poverty", "source": "World Bank", "year": 2022, "tags": ["money"]},
+    {"id": "mn-savings", "kind": "percent", "value": 4.6, "statement": "Americans save about 4.6% of their disposable income", "short": "the share of income Americans save", "source": "US Bureau of Economic Analysis", "year": 2024, "tags": ["money", "us"]},
+    {"id": "mn-rent", "kind": "percent", "value": 50, "statement": "About half of American renters spend more than 30% of their income on rent", "short": "the share of renters who are cost-burdened", "source": "Harvard Joint Center for Housing Studies", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-retirement", "kind": "percent", "value": 28, "statement": "About 28% of American non-retirees have no retirement savings at all", "short": "the share of Americans with nothing saved for retirement", "source": "US Federal Reserve, Survey of Household Economics", "year": 2023, "tags": ["money", "us"]},
+    {"id": "mn-inflation", "kind": "percent", "value": 8, "statement": "US consumer prices rose about 8% in 2022, the fastest in forty years", "short": "how much prices rose in one year", "source": "US Bureau of Labor Statistics", "year": 2022, "tags": ["money", "us"]},
+    {"id": "mn-smallbiz", "kind": "percent", "value": 50, "statement": "About half of new US businesses survive five years", "short": "a new business's odds of lasting five years", "source": "US Bureau of Labor Statistics", "year": 2022, "tags": ["money", "us"]}
+  ]
+}

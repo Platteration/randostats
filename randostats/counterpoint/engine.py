@@ -22,7 +22,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-FACTS_PATH = Path(__file__).with_name("facts.json")
+from .packs import CORE_PATH as FACTS_PATH, DEFAULT_VOICE, load_facts, load_voice
 
 # ---------------------------------------------------------------------------
 # Number words
@@ -200,39 +200,16 @@ class Counterpoint:
                 "gap": self.gap, "fallacy": self.fallacy}
 
 
-_FALLACY_PERCENT = [
-    "Correlation is not causation: a share of people who do X tells you nothing about what X does to them.",
-    "Base rates matter: '{v}% of people who do X' is meaningless without the rate among people who don't.",
-    "A percentage without a denominator is a vibe. Percent of whom, measured how, and when?",
-    "Popularity is not evidence. If {v}% of people did something, that is a fact about people, not about the thing.",
-]
-_FALLACY_VAGUE = [
-    "'Most people' is not a number. Ask for the study, the sample, and the year.",
-    "Argumentum ad populum: how many people believe something has no bearing on whether it is true.",
-]
-_FALLACY_RATIO = [
-    "Relative risk hides absolute risk: '{v}x more likely' can mean going from 1 in a million to {v} in a million.",
-    "A multiplier needs a baseline. {v} times more than what, measured on whom?",
-]
-
-_TEMPLATES_PERCENT = [
-    "Counterpoint: {fact}. By the same logic, {subject_or_that} is caused by {short}.",
-    "Sure. And {fact_lc}. Same number, zero connection, exactly as much proof.",
-    "{fact}. That's within {gap} of your figure, so clearly {short} explains it.",
-    "Fun fact of identical magnitude: {fact_lc}. Neither number proves anything about the other.",
-    "{claim_v}% is also roughly {short}. Coincidence? Yes. Entirely.",
-]
-_TEMPLATES_RATIO = [
-    "Counterpoint: {fact}. So '{fact_v}x' is also how much {short} beats its baseline, and nobody argues about that.",
-    "{fact}. Multipliers are cheap. What is the baseline?",
-    "By that math, {fact_lc}, and I still don't know what it proves.",
-]
-
-
 class CounterpointEngine:
-    def __init__(self, facts_path: Path = FACTS_PATH, seed: int | None = None):
-        payload = json.loads(Path(facts_path).read_text(encoding="utf-8"))
-        self.facts = [Fact(**f) for f in payload["facts"]]
+    def __init__(self, facts_path: Path | None = None, seed: int | None = None,
+                 packs: set[str] | None = None, voice: str = DEFAULT_VOICE):
+        if facts_path is not None:  # an explicit file wins, for tests and custom sets
+            raw = json.loads(Path(facts_path).read_text(encoding="utf-8"))["facts"]
+        else:
+            raw = load_facts(packs)
+        self.facts = [Fact(**{k: v for k, v in f.items() if k != "pack"}) for f in raw]
+        self.packs = set(packs or ())
+        self.voice = load_voice(voice)
         self.rng = random.Random(seed)
         self._recent: list[str] = []
 
@@ -272,8 +249,7 @@ class CounterpointEngine:
             "claim_v": self._fmt(claim.value),
             "fact_v": self._fmt(fact.value),
         }
-        pool = _TEMPLATES_RATIO if claim.kind == "ratio" else _TEMPLATES_PERCENT
-        pool = list(pool)
+        pool = list(self.voice["ratio"] if claim.kind == "ratio" else self.voice["percent"])
         if claim.kind == "percent" and gap > 3:
             pool = [t for t in pool if "identical" not in t and "Coincidence" not in t]
         self.rng.shuffle(pool)
@@ -282,8 +258,8 @@ class CounterpointEngine:
         return lines
 
     def _fallacy(self, claim: Claim) -> str:
-        pool = _FALLACY_RATIO if claim.kind == "ratio" else (_FALLACY_VAGUE if claim.quantifier == "vague" else _FALLACY_PERCENT)
-        return self.rng.choice(pool).format(v=self._fmt(claim.value))
+        key = "fallacy_ratio" if claim.kind == "ratio" else ("fallacy_vague" if claim.quantifier == "vague" else "fallacy_percent")
+        return self.rng.choice(self.voice[key]).format(v=self._fmt(claim.value))
 
     def respond(self, text: str, per_claim: int = 2, seen: set[str] | None = None) -> list[Counterpoint]:
         """Return counterpoints for every new claim in ``text``.

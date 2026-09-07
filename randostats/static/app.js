@@ -613,7 +613,7 @@
         <div class="claim">They said <b>“${esc(rs[0].claim.raw)}”</b>${llm ? '<span class="badge">Claude</span>' : ""}</div>
         <div class="punch">${esc(llm ? llm.punchline : chosen.lines[0])}</div>
         <div class="fact">${esc(chosen.fact.statement)}.</div>
-        <div class="src">${esc(chosen.fact.source)}, ${chosen.fact.year} · ${chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
+        <div class="src">${esc(chosen.fact.source)}, ${chosen.fact.year} · ${chosen.claim.kind === "ratio" ? "nearest match" : chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
         ${others.map(o => `<div class="fact" style="margin-top:6px">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${o.fact.year})</span></div>`).join("")}
         <div class="gap"><b>The actual problem:</b> ${esc(llm ? llm.logic_gap : chosen.fallacy)}</div>
       </div>`;
@@ -628,6 +628,28 @@
     if (live) { if (payload.results.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
   }
   $("#members-contact").addEventListener("change", () => renderMembers());
+  // Packs and voices are plain JSON on disk; the UI just toggles which are loaded.
+  function renderPacks(cfg) {
+    $("#pack-chips").innerHTML = cfg.packs.map(p =>
+      `<button class="chip ${p.enabled ? "on" : ""} ${p.always_on ? "fixed" : ""} ${p.locked ? "locked" : ""}" data-pack="${esc(p.id)}"
+        title="${esc(p.description)} (${p.facts} facts)"${p.always_on || p.locked ? " disabled" : ""}>${esc(p.name)}</button>`).join("");
+    $("#voice-chips").innerHTML = cfg.voices.map(v =>
+      `<button class="chip ${v.id === cfg.voice ? "on" : ""}" data-voice="${esc(v.id)}" title="${esc(v.description)}">${esc(v.name)}</button>`).join("");
+    $("#pack-count").textContent = `${fmt(cfg.facts)} facts loaded`;
+    $$("#pack-chips .chip:not([disabled])").forEach(b => b.addEventListener("click", async () => {
+      const on = $$("#pack-chips .chip.on").map(x => x.dataset.pack);
+      const next = b.classList.contains("on") ? on.filter(x => x !== b.dataset.pack) : [...on, b.dataset.pack];
+      renderPacks(await api("/api/counterpoint/packs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ packs: next }) }));
+      state.session = null;
+    }));
+    $$("#voice-chips .chip").forEach(b => b.addEventListener("click", async () => {
+      renderPacks(await api("/api/counterpoint/packs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice: b.dataset.voice }) }));
+      state.session = null;
+      if ($("#counter-text").value.trim()) counter($("#counter-text").value);
+    }));
+  }
+  render.counter = async () => { if (!$("#pack-chips").children.length) renderPacks(await api("/api/counterpoint/packs")); };
+
   $("#counter-go").addEventListener("click", () => counter($("#counter-text").value));
   $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value); });
   $("#counter-random").addEventListener("click", async () => {

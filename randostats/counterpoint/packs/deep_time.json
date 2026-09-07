@@ -1,0 +1,19 @@
+{
+  "id": "deep_time",
+  "name": "Deep time",
+  "description": "Ratios from the history of everything, for when someone says something is old.",
+  "facts": [
+    {"id": "dt-universe", "kind": "ratio", "value": 3, "statement": "The universe is about 3 times older than the Earth", "short": "the universe's age in Earths", "source": "NASA and the Planck mission", "year": 2018, "tags": ["time", "space"]},
+    {"id": "dt-earth-us", "kind": "ratio", "value": 15000, "statement": "The Earth is roughly 15,000 times older than our species", "short": "the Earth's age in human species lifetimes", "source": "US Geological Survey and the Smithsonian", "year": 2023, "tags": ["time"]},
+    {"id": "dt-sharks", "kind": "ratio", "value": 1.3, "statement": "Sharks are about 1.3 times older than trees, having appeared roughly 100 million years earlier", "short": "how much older sharks are than trees", "source": "Smithsonian National Museum of Natural History", "year": 2023, "tags": ["time", "animals"]},
+    {"id": "dt-trex", "kind": "ratio", "value": 1.4, "statement": "Tyrannosaurus lived closer in time to us than to Stegosaurus, by a factor of about 1.4", "short": "how much closer T. rex is to you than to Stegosaurus", "source": "Smithsonian National Museum of Natural History", "year": 2023, "tags": ["time", "animals"]},
+    {"id": "dt-cleopatra", "kind": "ratio", "value": 1.4, "statement": "Cleopatra lived closer to the Moon landing than to the building of the Great Pyramid, by roughly 1.4 times", "short": "how much closer Cleopatra is to the Moon landing", "source": "Standard chronologies of ancient Egypt", "year": 2023, "tags": ["time"]},
+    {"id": "dt-written", "kind": "percent", "value": 0.0017, "statement": "Written history covers about 5,000 of the roughly 300,000 years our species has existed", "short": "the share of human existence that was written down", "source": "Smithsonian Human Origins Program", "year": 2023, "tags": ["time"]},
+    {"id": "dt-holocene", "kind": "percent", "value": 4, "statement": "Farming covers only about 4% of the time our species has been around", "short": "the share of human existence that had agriculture", "source": "Smithsonian Human Origins Program", "year": 2023, "tags": ["time", "food"]},
+    {"id": "dt-oxford", "kind": "ratio", "value": 2, "statement": "Oxford University had been teaching for roughly twice as long as the Aztec Empire would last before that empire was founded", "short": "how much older Oxford is than the Aztec Empire", "source": "University of Oxford and standard Mesoamerican chronologies", "year": 2023, "tags": ["time"]},
+    {"id": "dt-fax", "kind": "ratio", "value": 1.03, "statement": "The fax machine was patented in 1843, about thirty years before the telephone", "short": "how much older the fax machine is than the telephone", "source": "Patent records", "year": 1843, "tags": ["time", "tech"]},
+    {"id": "dt-dinos", "kind": "ratio", "value": 700, "statement": "Dinosaurs ruled for roughly 700 times longer than modern humans have existed", "short": "the dinosaurs' reign in human species lifetimes", "source": "Smithsonian National Museum of Natural History", "year": 2023, "tags": ["time", "animals"]},
+    {"id": "dt-lifespan", "kind": "ratio", "value": 2, "statement": "Global life expectancy has roughly doubled since 1900", "short": "how much longer people live than a century ago", "source": "World Health Organization and UN population data", "year": 2023, "tags": ["time", "health"]},
+    {"id": "dt-internet", "kind": "percent", "value": 0.01, "statement": "The internet has existed for about 0.01% of the time our species has", "short": "the share of human existence that had the internet", "source": "Smithsonian Human Origins Program and internet history", "year": 2023, "tags": ["time", "tech"]}
+  ]
+}

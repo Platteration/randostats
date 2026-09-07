@@ -95,3 +95,33 @@ def test_wrapped_endpoint(client):
     # the kicker quotes a real sourced fact of the same size as your own share
     assert "counterpoint" in card and card["counterpoint"]["source"]
     assert client.get("/api/wrapped?year=1999").json()["card"]["empty"] is True
+
+
+def test_pack_and_voice_config(client):
+    cfg = client.get("/api/counterpoint/packs").json()
+    assert cfg["voice"] == "house"
+    base_facts = cfg["facts"]
+    assert any(p["id"] == "core" and p["always_on"] for p in cfg["packs"])
+
+    updated = client.post("/api/counterpoint/packs", json={"packs": ["sports"], "voice": "announcer"}).json()
+    assert updated["facts"] > base_facts and updated["voice"] == "announcer"
+    assert {p["id"] for p in updated["packs"] if p["enabled"]} == {"core", "sports"}
+
+    # the running engine actually changed
+    body = client.post("/api/counterpoint", json={"text": "78% of people drink beer"}).json()
+    assert any("!" in r["lines"][0] for r in body["results"])
+
+    assert client.post("/api/counterpoint/packs", json={"packs": ["nope"]}).status_code == 400
+    assert client.post("/api/counterpoint/packs", json={"voice": "nope"}).status_code == 400
+
+
+def test_pack_choice_survives_a_restart(tmp_path):
+    from randostats.api import create_app
+
+    db = tmp_path / "p.db"
+    with TestClient(create_app(db, use_llm=False)) as first:
+        first.post("/api/counterpoint/packs", json={"packs": ["money"], "voice": "victorian"})
+    with TestClient(create_app(db, use_llm=False)) as second:
+        cfg = second.get("/api/counterpoint/packs").json()
+        assert cfg["voice"] == "victorian"
+        assert {p["id"] for p in cfg["packs"] if p["enabled"]} == {"core", "money"}

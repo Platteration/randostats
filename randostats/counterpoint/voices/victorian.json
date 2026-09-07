@@ -1,0 +1,29 @@
+{
+  "id": "victorian",
+  "name": "Victorian gentleman",
+  "description": "Devastating, but terribly polite about it.",
+  "percent": [
+    "How singular. One might equally observe that {fact_lc}. I trust the connexion is as obvious to you as it is to me: there is none.",
+    "{fact}. A remarkable coincidence of magnitude, sir, and nothing whatever besides.",
+    "Your figure sits but {gap} from this one: {fact_lc}. Shall we declare them cousins?",
+    "By that reasoning, {subject_or_that} may be laid at the door of {short}. I shall not be doing so."
+  ],
+  "ratio": [
+    "A multiple, you say. Then permit me: {fact_lc}. Multiplied against what, precisely?",
+    "{fact}. A factor of {fact_v}, and still no baseline offered. Most irregular.",
+    "I am given a ratio and denied its denominator. Meanwhile, {fact_lc}."
+  ],
+  "fallacy_percent": [
+    "You have furnished a proportion and called it a cause. They are not the same article.",
+    "{v}% of persons, you say. Of which persons, counted by whom, and in what year?",
+    "That so many do a thing tells us of the many, and nothing of the thing."
+  ],
+  "fallacy_vague": [
+    "'Most people' is not a quantity, sir. It is a mood.",
+    "The multitude may believe what it likes. The multitude is not a source."
+  ],
+  "fallacy_ratio": [
+    "A relative risk conceals an absolute one. {v} times a trifle remains a trifle.",
+    "You offer a multiple without its base. I am obliged to decline it."
+  ]
+}

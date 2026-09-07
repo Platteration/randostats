@@ -64,3 +64,54 @@ def test_facts_are_well_formed():
         assert f.kind in ("percent", "ratio") and f.source and f.year >= 1990
         if f.kind == "percent":
             assert 0 <= f.value <= 100
+
+
+def test_packs_load_and_dedupe():
+    from randostats.counterpoint import packs
+
+    ids = {p["id"] for p in packs.list_packs()}
+    assert {"core", "sports", "money", "deep_time"} <= ids
+    core_only = packs.load_facts(set())
+    with_sports = packs.load_facts({"sports"})
+    assert len(with_sports) > len(core_only)
+    assert len({f["id"] for f in with_sports}) == len(with_sports)  # no duplicate ids
+    assert all(f.get("pack") for f in with_sports)
+
+
+def test_pack_facts_are_well_formed():
+    from randostats.counterpoint import packs
+
+    for fact in packs.load_facts({"sports", "money", "deep_time"}):
+        assert fact["kind"] in ("percent", "ratio")
+        assert fact["source"] and fact["short"] and fact["statement"]
+        assert not fact["statement"].endswith("."), f"{fact['id']} should not carry its own full stop"
+        if fact["kind"] == "percent":
+            assert 0 <= fact["value"] <= 100
+
+
+def test_enabling_a_pack_widens_the_matches():
+    plain = CounterpointEngine(seed=3)
+    sporty = CounterpointEngine(seed=3, packs={"sports"})
+    assert len(sporty.facts) > len(plain.facts)
+    ids = {f.id for f in sporty.facts}
+    assert "sp-ft" in ids and "sp-ft" not in {f.id for f in plain.facts}
+
+
+def test_every_voice_renders_every_claim_shape():
+    from randostats.counterpoint import packs
+
+    for voice in packs.list_voices():
+        engine = CounterpointEngine(seed=11, voice=voice["id"])
+        assert engine.voice["id"] == voice["id"]
+        for text in ("70% of people drink beer", "most people agree", "3 times more likely to crash"):
+            results = engine.respond(text)
+            assert results, f"{voice['id']} produced nothing for {text!r}"
+            for r in results:
+                assert "{" not in r.lines[0], f"unfilled placeholder in {voice['id']}"
+                assert "{" not in r.fallacy
+                assert r.lines[0].strip()
+
+
+def test_unknown_voice_falls_back_to_house():
+    engine = CounterpointEngine(seed=1, voice="does-not-exist")
+    assert engine.voice["id"] == "house"

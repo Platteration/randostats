@@ -13,11 +13,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import parsers, stats
-from .counterpoint import Claim, CounterpointEngine
+from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
 
 STATIC = Path(__file__).with_name("static")
+
+
+class PackConfig(BaseModel):
+    """Which fact packs are loaded and which voice writes the punchlines."""
+
+    packs: list[str] | None = None
+    voice: str | None = None
 
 
 class CounterRequest(BaseModel):
@@ -30,7 +37,12 @@ class CounterRequest(BaseModel):
 def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) -> FastAPI:
     app = FastAPI(title="randostats", version="0.1.0")
     store = Store(db_path)
-    engine = CounterpointEngine()
+
+    def build_engine() -> CounterpointEngine:
+        enabled = {p for p in (store.get_setting("packs", "") or "").split(",") if p}
+        return CounterpointEngine(packs=enabled, voice=store.get_setting("voice", cp_packs.DEFAULT_VOICE))
+
+    cp = {"engine": build_engine()}
     sessions: dict[str, set[str]] = {}
     if use_llm is None:
         use_llm = os.environ.get("RANDOSTATS_LLM", "").lower() in ("1", "true", "yes", "on")
@@ -171,7 +183,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         # percentages with a real statistic of the same size.
         if not card.get("empty"):
             claim = Claim("percent", round(card["sent_share"] * 100, 1), f"{card['sent_share']:.0%} of these messages", "you wrote them")
-            match = engine.match(claim, k=1)
+            match = cp["engine"].match(claim, k=1)
             if match:
                 fact, gap = match[0]
                 card["counterpoint"] = {"statement": fact.statement, "source": fact.source, "year": fact.year, "gap": round(gap, 1)}
@@ -184,7 +196,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         session = req.session
         if session:
             seen = sessions.setdefault(session, set())
-        results = engine.respond(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
+        results = cp["engine"].respond(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
         payload = {"session": session, "results": [r.to_dict() for r in results]}
         if results and llm_on and req.llm:
             by_claim: dict[str, list] = {}
@@ -201,11 +213,35 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
 
     @app.get("/api/counterpoint/random")
     def random_pair():
-        return engine.spurious_pair()
+        return cp["engine"].spurious_pair()
 
     @app.get("/api/counterpoint/facts")
     def facts():
-        return [f.to_dict() for f in engine.facts]
+        return [f.to_dict() for f in cp["engine"].facts]
+
+    @app.get("/api/counterpoint/packs")
+    def counterpoint_packs():
+        enabled = {p for p in (store.get_setting("packs", "") or "").split(",") if p}
+        return {"packs": cp_packs.list_packs(enabled), "voices": cp_packs.list_voices(),
+                "voice": cp["engine"].voice["id"], "facts": len(cp["engine"].facts)}
+
+    @app.post("/api/counterpoint/packs")
+    def set_counterpoint_packs(config: PackConfig):
+        known = {p["id"] for p in cp_packs.list_packs()}
+        if config.packs is not None:
+            unknown = set(config.packs) - known
+            if unknown:
+                raise HTTPException(400, f"unknown pack(s): {', '.join(sorted(unknown))}")
+            store.set_setting("packs", ",".join(sorted(set(config.packs) - {"core"})))
+        if config.voice is not None:
+            if config.voice not in {v["id"] for v in cp_packs.list_voices()}:
+                raise HTTPException(400, f"unknown voice: {config.voice}")
+            store.set_setting("voice", config.voice)
+        cp["engine"] = build_engine()
+        sessions.clear()  # old answers were written in the old voice
+        enabled = {p for p in (store.get_setting("packs", "") or "").split(",") if p}
+        return {"packs": cp_packs.list_packs(enabled), "voices": cp_packs.list_voices(),
+                "voice": cp["engine"].voice["id"], "facts": len(cp["engine"].facts)}
 
     app.state.store = store
     return app

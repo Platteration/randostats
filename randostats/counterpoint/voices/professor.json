@@ -1,0 +1,29 @@
+{
+  "id": "professor",
+  "name": "Deadpan professor",
+  "description": "Patient, pedantic, and about to ask for your methodology.",
+  "percent": [
+    "An interesting figure. Observe that {fact_lc}. The two are unrelated, which is rather the point.",
+    "Noted. {fact}. Two quantities of equal size are not thereby connected; that is arithmetic, not evidence.",
+    "Consider: {fact_lc}. Your number differs from it by {gap}. I invite you to explain the mechanism.",
+    "{fact}. If magnitude implied causation, we would conclude that {subject_or_that} follows from {short}. We do not."
+  ],
+  "ratio": [
+    "A multiplier without a base rate tells us very little. For comparison, {fact_lc}.",
+    "{fact}. A factor of {fact_v} is impressive only once we know what it multiplies.",
+    "You have given me a ratio. I would like a denominator. Meanwhile, {fact_lc}."
+  ],
+  "fallacy_percent": [
+    "The claim omits its comparison group. {v}% of whom, measured against what baseline?",
+    "This is a correlation presented as a mechanism. The two are not the same thing.",
+    "A proportion is not a cause. We would need the rate among those who do not do it."
+  ],
+  "fallacy_vague": [
+    "'Most' is not a measurement. I would want the sample, the method, and the year.",
+    "Appeal to popularity. The number of believers has no bearing on the truth of the belief."
+  ],
+  "fallacy_ratio": [
+    "Relative risk without absolute risk is close to meaningless. {v} times a very small number remains a very small number.",
+    "Multiplied against what? A ratio requires a stated baseline to carry any information."
+  ]
+}

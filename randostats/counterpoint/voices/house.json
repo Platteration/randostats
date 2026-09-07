@@ -1,0 +1,31 @@
+{
+  "id": "house",
+  "name": "House",
+  "description": "Dry, quick, and slightly tired of your argument.",
+  "percent": [
+    "Counterpoint: {fact}. By the same logic, {subject_or_that} is caused by {short}.",
+    "Sure. And {fact_lc}. Same number, zero connection, exactly as much proof.",
+    "{fact}. That's within {gap} of your figure, so clearly {short} explains it.",
+    "Fun fact of identical magnitude: {fact_lc}. Neither number proves anything about the other.",
+    "{claim_v}% is also roughly {short}. Coincidence? Yes. Entirely."
+  ],
+  "ratio": [
+    "Counterpoint: {fact}. So '{fact_v}x' is also how much {short} beats its baseline, and nobody argues about that.",
+    "{fact}. Multipliers are cheap. What is the baseline?",
+    "By that math, {fact_lc}, and I still don't know what it proves."
+  ],
+  "fallacy_percent": [
+    "Correlation is not causation: a share of people who do X tells you nothing about what X does to them.",
+    "Base rates matter: '{v}% of people who do X' is meaningless without the rate among people who don't.",
+    "A percentage without a denominator is a vibe. Percent of whom, measured how, and when?",
+    "Popularity is not evidence. If {v}% of people did something, that is a fact about people, not about the thing."
+  ],
+  "fallacy_vague": [
+    "'Most people' is not a number. Ask for the study, the sample, and the year.",
+    "Argumentum ad populum: how many people believe something has no bearing on whether it is true."
+  ],
+  "fallacy_ratio": [
+    "Relative risk hides absolute risk: '{v}x more likely' can mean going from 1 in a million to {v} in a million.",
+    "A multiplier needs a baseline. {v} times more than what, measured on whom?"
+  ]
+}

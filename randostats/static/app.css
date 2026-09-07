@@ -103,6 +103,15 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .spark { vertical-align: middle; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 
+/* ---------- fact packs and voices ---------- */
+.packs { display: grid; gap: 8px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--grid); }
+.pack-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--axis); background: transparent; color: var(--ink-2); border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+.chip:hover { background: var(--grid); }
+.chip.on { background: var(--ink); color: var(--surface-1); border-color: var(--ink); }
+.chip.fixed { opacity: .75; cursor: default; }
+.chip.locked { opacity: .5; cursor: not-allowed; }
+
 /* ---------- wrapped card ---------- */
 .wrapped-holder { display: flex; justify-content: center; background: var(--page); }
 #wrapped-card svg { width: 100%; max-width: 540px; height: auto; border-radius: 14px; box-shadow: 0 4px 18px rgba(0,0,0,.10); }

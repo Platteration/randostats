@@ -1,0 +1,19 @@
+{
+  "id": "sports",
+  "name": "Sports",
+  "description": "Percentages from the games people argue about hardest.",
+  "facts": [
+    {"id": "sp-ft", "kind": "percent", "value": 78, "statement": "NBA players make about 78% of their free throws", "short": "the share of NBA free throws that go in", "source": "NBA league averages", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-fg", "kind": "percent", "value": 85, "statement": "NFL kickers make about 85% of their field goal attempts", "short": "the share of NFL field goals that go through", "source": "NFL season statistics", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-pen", "kind": "percent", "value": 76, "statement": "About 76% of penalty kicks in professional football are scored", "short": "the share of penalties that go in", "source": "Analysis of major European leagues", "year": 2021, "tags": ["sports"]},
+    {"id": "sp-bat", "kind": "percent", "value": 25, "statement": "The average Major League batter hits about .248, so he fails three times in four", "short": "how often a big-league hitter actually hits", "source": "MLB league batting average", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-serve", "kind": "percent", "value": 60, "statement": "Professional tennis players land about 60% of their first serves", "short": "the share of first serves that land in", "source": "ATP Tour serve statistics", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-home", "kind": "percent", "value": 45, "statement": "The home team wins about 45% of Premier League matches", "short": "the home team's share of wins", "source": "Premier League results", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-ncaa-fb", "kind": "percent", "value": 1.6, "statement": "About 1.6% of college football players are drafted into the NFL", "short": "the share of college players who turn professional", "source": "NCAA Research", "year": 2020, "tags": ["sports"]},
+    {"id": "sp-ncaa-hs", "kind": "percent", "value": 7, "statement": "About 7% of American high school athletes go on to play in college at any level", "short": "the share of school athletes who play in college", "source": "NCAA Research", "year": 2020, "tags": ["sports"]},
+    {"id": "sp-3pt", "kind": "percent", "value": 36, "statement": "NBA teams make about 36% of their three-point attempts", "short": "the share of three-pointers that drop", "source": "NBA league averages", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-draw", "kind": "percent", "value": 24, "statement": "About a quarter of Premier League matches end in a draw", "short": "the share of matches nobody wins", "source": "Premier League results", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-marathon", "kind": "ratio", "value": 2, "statement": "The marathon world record pace is roughly twice the speed of an average recreational runner", "short": "how much faster the record holder runs", "source": "World Athletics and race timing data", "year": 2023, "tags": ["sports"]},
+    {"id": "sp-injury", "kind": "percent", "value": 50, "statement": "About half of all sports injuries seen in clinics are overuse injuries, not accidents", "short": "the share of sports injuries caused by repetition", "source": "American Academy of Pediatrics", "year": 2021, "tags": ["sports", "health"]}
+  ]
+}
