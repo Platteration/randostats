@@ -565,3 +565,76 @@ def tone(messages: list[Message], contact: str | None = None) -> dict:
         "top_positive": [{"word": w, "count": c} for w, c in hits["positive"].most_common(15)],
         "top_negative": [{"word": w, "count": c} for w, c in hits["negative"].most_common(15)],
     }
+
+
+# ---------------------------------------------------------------------------
+# Wrapped: the year in one card
+# ---------------------------------------------------------------------------
+
+def longest_streak(messages: list[Message]) -> dict:
+    """Longest run of consecutive days with at least one message."""
+    days = sorted({m.timestamp.date() for m in messages})
+    if not days:
+        return {"days": 0, "start": None, "end": None}
+    best = run = 1
+    best_end = run_start = days[0]
+    best_start = days[0]
+    for prev, cur in zip(days, days[1:]):
+        if (cur - prev).days == 1:
+            run += 1
+        else:
+            run, run_start = 1, cur
+        if run > best:
+            best, best_start, best_end = run, run_start, cur
+    return {"days": best, "start": best_start.isoformat(), "end": best_end.isoformat()}
+
+
+def years(messages: list[Message]) -> list[int]:
+    return sorted({m.timestamp.year for m in messages})
+
+
+def wrapped(messages: list[Message], year: int | None = None, speller: "Speller | None" = None) -> dict:
+    """The handful of numbers worth putting on a card."""
+    msgs = [m for m in messages if year is None or m.timestamp.year == year]
+    if not msgs:
+        return {"year": year, "empty": True}
+
+    ov = overview(msgs)
+    contacts = contact_frequency(msgs)
+    t = timing(msgs)
+    health = conversation_summary(conversation_health(msgs))
+    words = word_frequency(msgs, direction="sent", limit=1)
+    em = emoji_stats(msgs, limit=1)
+    typos = misspellings(msgs, speller, direction="sent", limit=1)
+    tn = tone(msgs)
+    night = sum(1 for m in msgs if 0 <= m.timestamp.hour < 5)
+
+    return {
+        "year": year,
+        "empty": False,
+        "total": ov["total"],
+        "sent": ov["sent"],
+        "received": ov["received"],
+        "sent_share": round(ov["sent"] / ov["total"], 3) if ov["total"] else 0,
+        "per_day": ov["per_day"],
+        "words_written": sum(len(words_of(m.text)) for m in msgs if m.direction == "sent"),
+        "people": ov["contacts"],
+        "top_contact": {"contact": contacts[0]["contact"], "total": contacts[0]["total"],
+                        "sent": contacts[0]["sent"], "received": contacts[0]["received"]} if contacts else None,
+        "runner_up": {"contact": contacts[1]["contact"], "total": contacts[1]["total"]} if len(contacts) > 1 else None,
+        "peak_hour": t["peak_hour"],
+        "peak_weekday": t["peak_weekday"],
+        "busiest_day": t["busiest_day"],
+        "night_messages": night,
+        "night_share": round(night / ov["total"], 3) if ov["total"] else 0,
+        "reply_median": (t["reply_latency"] or {}).get("you_median_minutes"),
+        "their_reply_median": (t["reply_latency"] or {}).get("them_median_minutes"),
+        "conversations": health["conversations"],
+        "you_opened_share": health["you_opened_share"],
+        "streak": longest_streak(msgs),
+        "top_word": words[0] if words else None,
+        "top_emoji": em["yours"][0] if em["yours"] else (em["top"][0] if em["top"] else None),
+        "top_typo": typos["words"][0] if typos["words"] else None,
+        "typo_rate": typos["rate_per_1000"],
+        "tone_net": tn["net"],
+    }

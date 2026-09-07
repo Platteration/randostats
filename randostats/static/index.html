@@ -15,6 +15,7 @@
     <button data-tab="timing">Timing</button>
     <button data-tab="spelling">Spelling</button>
     <button data-tab="words">Words &amp; tone</button>
+    <button data-tab="wrapped">Wrapped</button>
     <button data-tab="counter">Counterpoint</button>
     <button data-tab="import">Import</button>
   </nav>
@@ -102,6 +103,15 @@
       <div class="card"><div class="card-head"><h2>Tone by person</h2><button class="ghost" data-toggle-table="tone-people">Table</button></div><div id="tone-people" class="chart"></div></div>
       <div class="card"><div class="card-head"><h2>The words behind it</h2></div><div id="tone-words"></div></div>
     </div>
+  </section>
+
+  <section id="tab-wrapped" class="tab">
+    <div class="filters">
+      <label>Year <select id="wrapped-year"></select></label>
+      <button class="primary" id="wrapped-png">Download PNG</button>
+      <span class="muted">1080 × 1350, sized for a phone screen</span>
+    </div>
+    <div class="card wrapped-holder"><div id="wrapped-card"></div></div>
   </section>
 
   <section id="tab-counter" class="tab">

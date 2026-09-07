@@ -139,3 +139,22 @@ def test_tone_scores_and_splits_by_month():
     assert t["by_month"][0]["net"] == 1.0 and t["by_month"][1]["net"] < 0
     assert t["by_contact"][0]["contact"] == "Alex"
     assert {w["word"] for w in t["top_positive"]} == {"love", "thanks"}
+
+
+def test_longest_streak_counts_consecutive_days():
+    t = datetime(2024, 3, 1, 9)
+    msgs = [msg("Alex", "sent", t + timedelta(days=d), "x") for d in (0, 1, 2, 5, 6)]
+    streak = stats.longest_streak(msgs)
+    assert streak["days"] == 3 and streak["start"] == "2024-03-01" and streak["end"] == "2024-03-03"
+    assert stats.longest_streak([])["days"] == 0
+
+
+def test_wrapped_headline_numbers(messages):
+    card = stats.wrapped(messages, year=2024)
+    assert card["empty"] is False and card["year"] == 2024
+    assert card["total"] == 6 and card["sent"] == 3 and card["people"] == 2
+    assert card["top_contact"]["contact"] in ("Alex", "Priya")
+    assert card["top_typo"]["word"] in ("definately", "recieved", "tommorow")
+    assert 0 <= card["you_opened_share"] <= 1
+    assert stats.years(messages) == [2024]
+    assert stats.wrapped(messages, year=1999)["empty"] is True

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import parsers, stats
-from .counterpoint import CounterpointEngine
+from .counterpoint import Claim, CounterpointEngine
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
 
@@ -159,6 +159,23 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     @app.get("/api/stats/words")
     def words(direction: str | None = None, limit: int = 50):
         return stats.word_frequency(messages(), direction=direction, limit=limit)
+
+    @app.get("/api/wrapped")
+    def wrapped(year: int | None = None):
+        msgs = messages()
+        available = stats.years(msgs)
+        if year is None and available:
+            year = available[-1]
+        card = stats.wrapped(msgs, year=year, speller=speller())
+        # Tie the two halves of the app together: answer one of your own
+        # percentages with a real statistic of the same size.
+        if not card.get("empty"):
+            claim = Claim("percent", round(card["sent_share"] * 100, 1), f"{card['sent_share']:.0%} of these messages", "you wrote them")
+            match = engine.match(claim, k=1)
+            if match:
+                fact, gap = match[0]
+                card["counterpoint"] = {"statement": fact.statement, "source": fact.source, "year": fact.year, "gap": round(gap, 1)}
+        return {"years": available, "card": card}
 
     # -- counterpoint ---------------------------------------------------------
     @app.post("/api/counterpoint")

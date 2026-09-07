@@ -103,6 +103,10 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .spark { vertical-align: middle; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 
+/* ---------- wrapped card ---------- */
+.wrapped-holder { display: flex; justify-content: center; background: var(--page); }
+#wrapped-card svg { width: 100%; max-width: 540px; height: auto; border-radius: 14px; box-shadow: 0 4px 18px rgba(0,0,0,.10); }
+
 /* ---------- drill-down drawer ---------- */
 .scrim { position: fixed; inset: 0; background: rgba(11,11,11,.35); z-index: 19; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 20; display: flex; flex-direction: column;

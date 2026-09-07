@@ -84,3 +84,14 @@ def test_message_search_endpoint(client):
     assert client.get("/api/messages?q=wich").json()["total"] == 2
     assert client.get("/api/messages?hour=10").json()["messages"][0]["text"] == "a sandwich"
     assert client.get("/api/messages?direction=nonsense").status_code == 400
+
+
+def test_wrapped_endpoint(client):
+    client.post("/api/import", files={"file": ("chat.txt", WA.encode())}, data={"self_name": "Sam"})
+    body = client.get("/api/wrapped").json()
+    assert body["years"] == [2024]
+    card = body["card"]
+    assert card["total"] == 2 and card["year"] == 2024
+    # the kicker quotes a real sourced fact of the same size as your own share
+    assert "counterpoint" in card and card["counterpoint"]["source"]
+    assert client.get("/api/wrapped?year=1999").json()["card"]["empty"] is True

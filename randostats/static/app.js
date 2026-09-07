@@ -488,6 +488,116 @@
     $$("#tone-words tr[data-word]").forEach(tr => tr.addEventListener("click", () => openDrawer(`“${tr.dataset.word}”`, { word: tr.dataset.word })));
   };
 
+  // ---------- wrapped card ----------
+  // Built as plain SVG (no foreignObject) so it can be rasterised to PNG.
+  const W = 1080, H = 1350, PAD = 76;
+  const compact = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : fmt(n);
+
+  const fitLine = (s, width, size) => {
+    const max = Math.floor(width / (size * 0.52));
+    return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "…";
+  };
+
+  function wrappedSVG(c, year) {
+    if (!c || c.empty) return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"><rect width="${W}" height="${H}" fill="#fcfcfb"/>
+      <text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="34" fill="#898781">No messages in ${esc(String(year))}.</text></svg>`;
+    const F = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+    const ink = "#0b0b0b", ink2 = "#52514e", mute = "#898781", surf = "#fcfcfb", card = "#f2f1ec";
+    const hue = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"];
+    const T = (x, y, s, size, { fill = ink, weight = 400, anchor = "start", spacing = 0 } = {}) =>
+      `<text x="${x}" y="${y}" font-family='${F}' font-size="${size}" font-weight="${weight}" fill="${fill}" text-anchor="${anchor}"${spacing ? ` letter-spacing="${spacing}"` : ""}>${esc(s)}</text>`;
+    const box = (x, y, w, h, r = 18, fill = card) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="${fill}"/>`;
+    const TILE_H = 132;
+    const fit = (s, max = 46) => Math.max(24, Math.min(max, Math.floor((colW - 52) / (String(s).length * 0.62))));
+    const tile = (x, y, w, label, value, sub, accent) =>
+      box(x, y, w, TILE_H) + T(x + 26, y + 38, label.toUpperCase(), 19, { fill: mute, spacing: 1.4 }) +
+      T(x + 26, y + 88, value, fit(value), { weight: 600, fill: accent || ink }) +
+      (sub ? T(x + 26, y + 118, sub, 19, { fill: ink2 }) : "");
+
+    const hours = (v) => v == null ? "n/a" : v < 60 ? `${Math.round(v)} min` : `${(v / 60).toFixed(1)} h`;
+    const top = c.top_contact, colW = (W - PAD * 2 - 24) / 2;
+    let y = 0;
+    const parts = [`<rect width="${W}" height="${H}" fill="${surf}"/>`];
+    parts.push(`<rect x="0" y="0" width="${W}" height="10" fill="${hue[0]}"/>`);
+    parts.push(T(PAD, 96, "RANDOSTATS", 24, { fill: mute, spacing: 3, weight: 600 }));
+    parts.push(T(W - PAD, 96, String(year), 24, { fill: mute, anchor: "end", spacing: 2 }));
+
+    parts.push(T(PAD, 244, compact(c.total), 140, { weight: 600 }));
+    parts.push(T(PAD, 292, `messages with ${c.people} ${c.people === 1 ? "person" : "people"}, ${c.per_day} a day`, 29, { fill: ink2 }));
+
+    y = 340;
+    parts.push(box(PAD, y, W - PAD * 2, 180));
+    parts.push(T(PAD + 26, y + 40, "MOST OF THEM WITH", 19, { fill: mute, spacing: 1.4 }));
+    if (top) {
+      parts.push(T(PAD + 26, y + 104, top.contact, fit(top.contact, 50), { weight: 600 }));
+      parts.push(T(PAD + 26, y + 144, `${fmt(top.total)} messages · you wrote ${Math.round(100 * top.sent / top.total)}%`, 23, { fill: ink2 }));
+      const barW = W - PAD * 2 - 52, x0 = PAD + 26, yb = y + 158;
+      const sw = barW * top.sent / top.total;
+      parts.push(`<rect x="${x0}" y="${yb}" width="${Math.max(0, sw - 2)}" height="8" rx="4" fill="${hue[0]}"/>`);
+      parts.push(`<rect x="${x0 + sw}" y="${yb}" width="${barW - sw}" height="8" rx="4" fill="${hue[1]}"/>`);
+      if (c.runner_up) parts.push(T(W - PAD - 26, y + 40, `then ${c.runner_up.contact} (${compact(c.runner_up.total)})`, 21, { fill: mute, anchor: "end" }));
+    }
+
+    y = 548;
+    parts.push(tile(PAD, y, colW, "Busiest hour", `${c.peak_hour}:00`, `and ${c.peak_weekday} more than any day`));
+    parts.push(tile(PAD + colW + 24, y, colW, "You reply in", hours(c.reply_median), `they take ${hours(c.their_reply_median)}`));
+    y += 152;
+    parts.push(tile(PAD, y, colW, "After midnight", compact(c.night_messages), `${pct(c.night_share)} of everything`, hue[2]));
+    parts.push(tile(PAD + colW + 24, y, colW, "Longest streak", `${fmt(c.streak.days)} d`, "in a row without a gap"));
+    y += 152;
+    parts.push(tile(PAD, y, colW, "Your word", c.top_word ? c.top_word.word : "none", c.top_word ? `${fmt(c.top_word.count)} times` : ""));
+    parts.push(tile(PAD + colW + 24, y, colW, "Your emoji", c.top_emoji ? c.top_emoji.emoji : "none", c.top_emoji ? `${fmt(c.top_emoji.count)} times` : "you type in words"));
+    y += 152;
+    parts.push(tile(PAD, y, colW, "Most misspelled", c.top_typo ? c.top_typo.word : "nothing", c.top_typo ? `${fmt(c.top_typo.count)} times` : "suspicious", hue[1]));
+    parts.push(tile(PAD + colW + 24, y, colW, "You started", pct(c.you_opened_share), `of ${compact(c.conversations)} conversations`));
+
+    y = 1168;
+    if (c.counterpoint) {
+      parts.push(`<line x1="${PAD}" y1="${y}" x2="${W - PAD}" y2="${y}" stroke="#e1e0d9" stroke-width="2"/>`);
+      parts.push(T(PAD, y + 40, `You wrote ${pct(c.sent_share)} of these messages.`, 25, { fill: ink2 }));
+      parts.push(T(PAD, y + 78, fitLine(c.counterpoint.statement + ".", W - PAD * 2, 25), 25, { fill: ink, weight: 600 }));
+      parts.push(T(PAD, y + 112, `${c.counterpoint.source}, ${c.counterpoint.year} · unrelated, equally true`, 20, { fill: mute }));
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${parts.join("")}</svg>`;
+  }
+
+  render.wrapped = async () => {
+    const sel = $("#wrapped-year");
+    const chosen = sel.value;
+    const { years, card } = await api("/api/wrapped" + (chosen ? `?year=${chosen}` : ""));
+    if (sel.options.length !== years.length) {
+      sel.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join("");
+      if (card.year) sel.value = card.year;
+    }
+    $("#wrapped-card").innerHTML = wrappedSVG(card, card.year ?? "");
+  };
+
+  $("#wrapped-year").addEventListener("change", () => render.wrapped());
+  $("#wrapped-png").addEventListener("click", () => {
+    const svg = $("#wrapped-card svg");
+    if (!svg) return;
+    const blob = new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const scale = 2, canvas = document.createElement("canvas");
+      canvas.width = W * scale; canvas.height = H * scale;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, W, H);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((png) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(png);
+        a.download = `randostats-${$("#wrapped-year").value || "wrapped"}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }, "image/png");
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); alert("Could not render the PNG. The card is still on screen."); };
+    img.src = url;
+  });
+
   // ---------- counterpoint ----------
   const esc = (s) => String(s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
   function renderCounter(payload, { prepend = false } = {}) {
