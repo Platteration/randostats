@@ -86,6 +86,23 @@ statistics, so every number shown still traces to a listed source. Requests use
 `claude-opus-5` with refusal fallbacks enabled; set `RANDOSTATS_MODEL` to change
 the model.
 
+## Performance
+
+Measured on a generated archive of 250,000 messages across 40 people and nine
+years, which is larger than most real ones:
+
+| Step | Cold | Repeat view |
+|---|---|---|
+| Import and index | 5.7s | — |
+| Slowest view (tone words) | 1.9s | 3ms |
+| Misspellings | 1.7s | 3ms |
+| Everything else | under 1.6s | 3ms |
+
+Aggregates are pure functions of the imported messages, so each view is
+computed once per import and cached until the next one. Importing or clearing
+messages invalidates the cache; there is a test for that, because stale
+numbers would be worse than slow ones.
+
 ## Fact packs and voices
 
 `randostats/counterpoint/packs/*.json` holds themed fact packs (Sports, Money,

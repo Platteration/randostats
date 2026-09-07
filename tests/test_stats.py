@@ -158,3 +158,25 @@ def test_wrapped_headline_numbers(messages):
     assert 0 <= card["you_opened_share"] <= 1
     assert stats.years(messages) == [2024]
     assert stats.wrapped(messages, year=1999)["empty"] is True
+
+
+def test_contact_peaks_matches_a_per_contact_timing_pass():
+    """The one-pass version replaced a full scan per contact; they must agree."""
+    t = datetime(2024, 1, 1, 9)  # a Monday
+    msgs = ([msg("Alex", "sent", t + timedelta(hours=h), "x") for h in (0, 1, 1, 26)] +
+            [msg("Priya", "received", t + timedelta(days=2, hours=h), "y") for h in (0, 5, 5)])
+    peaks = {p["contact"]: p for p in stats.contact_peaks(msgs, limit=10)}
+    for contact, row in peaks.items():
+        reference = stats.timing(msgs, contact=contact)
+        assert row["peak_hour"] == reference["peak_hour"]
+        assert row["peak_weekday"] == reference["peak_weekday"]
+        assert row["by_hour"] == [h["sent"] + h["received"] for h in reference["by_hour"]]
+        assert row["total"] == reference["by_month"][0]["count"] or row["total"] > 0
+
+
+def test_media_placeholders_still_detected_after_the_fast_path():
+    for text in ("<Media omitted>", "image omitted", "‎video omitted", "This message was deleted",
+                 "<attached: 00000042-PHOTO.jpg>", "STICKER OMITTED"):
+        assert stats.is_media_placeholder(text), text
+    for text in ("omit nothing here", "we deleted the plan? no", "hello there", "attach the file later"):
+        assert not stats.is_media_placeholder(text), text

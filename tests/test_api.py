@@ -142,3 +142,46 @@ def test_import_detects_a_telegram_export(client):
     body = client.post("/api/import", files={"file": ("result.json", json.dumps(payload).encode())},
                        data={"self_name": "Sam"}).json()
     assert body["format"] == "telegram" and body["parsed"] == 2 and body["note"] is None
+
+
+def test_stats_are_computed_once_per_import(client, monkeypatch):
+    """Aggregates take seconds on a real archive, so each view is computed once."""
+    from randostats import stats as stats_module
+
+    rows = [{"contact": "Alex", "sender": "Sam", "direction": "sent",
+             "timestamp": "2024-01-01T10:00:00", "text": "hello"}]
+    client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())},
+                data={"self_name": "Sam", "fmt": "json"})
+
+    calls = []
+    real = stats_module.tone
+    monkeypatch.setattr(stats_module, "tone", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+
+    first = client.get("/api/stats/tone").json()
+    second = client.get("/api/stats/tone").json()
+    assert first == second and len(calls) == 1
+
+    # a different filter is a different view, so it is computed
+    client.get("/api/stats/tone?contact=Alex")
+    assert len(calls) == 2
+
+
+def test_importing_invalidates_cached_stats(client):
+    """Stale aggregates after an import would be worse than slow ones."""
+    first = [{"contact": "Alex", "sender": "Sam", "direction": "sent",
+              "timestamp": "2024-01-01T10:00:00", "text": "hello"}]
+    client.post("/api/import", files={"file": ("a.json", json.dumps(first).encode())},
+                data={"self_name": "Sam", "fmt": "json"})
+    assert client.get("/api/stats/overview").json()["total"] == 1
+    assert len(client.get("/api/stats/contacts").json()) == 1
+
+    more = [{"contact": "Priya", "sender": "Priya", "direction": "received",
+             "timestamp": "2024-01-02T10:00:00", "text": "hi"}]
+    client.post("/api/import", files={"file": ("b.json", json.dumps(more).encode())},
+                data={"self_name": "Sam", "fmt": "json"})
+    assert client.get("/api/stats/overview").json()["total"] == 2
+    assert len(client.get("/api/stats/contacts").json()) == 2
+
+    client.delete("/api/messages")
+    assert client.get("/api/stats/overview").json()["total"] == 0
+    assert client.get("/api/stats/contacts").json() == []

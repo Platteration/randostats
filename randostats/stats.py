@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from functools import lru_cache
 from datetime import timedelta
 from statistics import median
 from typing import Iterable
@@ -40,12 +41,24 @@ venmo paypal zoom spotify google gmail amazon reddit twitter discord
 
 
 def _sanitise(text: str) -> str:
-    text = _URL.sub(" ", text)
-    text = _MENTION.sub(" ", text)
+    if "http" in text or "www." in text:
+        text = _URL.sub(" ", text)
+    if "@" in text or "#" in text:
+        text = _MENTION.sub(" ", text)
     return text
 
 
+# Fragments of every placeholder above, in the two cases exports actually use
+# ("<Media omitted>", "STICKER OMITTED"). Nearly every real message fails all
+# of them, so the lowercase copy and the full scan below are skipped. A
+# compiled case-insensitive alternation was tried here and measured three
+# times slower than this.
+_MEDIA_HINTS = ("mitted", "MITTED", "elete", "ELETE", "ttach", "TTACH")
+
+
 def is_media_placeholder(text: str) -> bool:
+    if not any(hint in text for hint in _MEDIA_HINTS):
+        return False
     t = text.strip().lower()
     return any(p in t for p in _MEDIA_PLACEHOLDERS)
 
@@ -182,12 +195,31 @@ def reply_latency(messages: list[Message], max_gap_hours: float = 12.0) -> dict 
 
 
 def contact_peaks(messages: list[Message], limit: int = 20) -> list[dict]:
-    """For each contact, the hour and weekday they talk to you most."""
+    """For each contact, the hour and weekday they talk to you most.
+
+    One pass over the messages, bucketed per contact. Calling timing() per
+    contact instead costs a full scan each time.
+    """
+    hours: dict[str, list[int]] = defaultdict(lambda: [0] * 24)
+    weekdays: dict[str, list[int]] = defaultdict(lambda: [0] * 7)
+    totals: Counter = Counter()
+    for m in messages:
+        contact = m.contact
+        hours[contact][m.timestamp.hour] += 1
+        weekdays[contact][m.timestamp.weekday()] += 1
+        totals[contact] += 1
+
     out = []
-    for row in contact_frequency(messages, limit=limit):
-        t = timing(messages, contact=row["contact"])
-        out.append({"contact": row["contact"], "total": row["total"], "peak_hour": t["peak_hour"],
-                    "peak_weekday": t["peak_weekday"], "by_hour": [h["sent"] + h["received"] for h in t["by_hour"]]})
+    for contact, total in totals.most_common(limit):
+        by_hour = hours[contact]
+        by_weekday = weekdays[contact]
+        out.append({
+            "contact": contact,
+            "total": total,
+            "peak_hour": max(range(24), key=lambda i: by_hour[i]),
+            "peak_weekday": WEEKDAYS[max(range(7), key=lambda i: by_weekday[i])],
+            "by_hour": by_hour,
+        })
     return out
 
 
@@ -252,17 +284,21 @@ def _looks_like_name(word: str, position: int) -> bool:
     return position > 0 and word[0].isupper()
 
 
+_REPEATED = re.compile(r"(.)\1{2,}")
+_STRETCHED = re.compile(r"(ha){2,}|(he){2,}|(lo)+l|o{3,}|a{3,}|e{3,}|y{3,}|z{2,}|m{3,}")
+
+
+@lru_cache(maxsize=200_000)
 def _is_noise(word: str) -> bool:
+    """Laughter, keysmashes and text-speak, which no dictionary should judge."""
     lw = word.lower()
     if len(lw) < 3 or lw in SLANG:
         return True
-    if re.fullmatch(r"(.)\1{2,}", lw):  # "aaa", "zzz"
+    if _REPEATED.fullmatch(lw):  # "aaa", "zzz"
         return True
-    if re.search(r"(ha){2,}|(he){2,}|(lo)+l|o{3,}|a{3,}|e{3,}|y{3,}|z{2,}|m{3,}", lw):  # stretched words
+    if _STRETCHED.search(lw):  # "hahaha", "noooo"
         return True
-    if not lw.isalpha() and "'" not in lw:
-        return True
-    return False
+    return not lw.isalpha() and "'" not in lw
 
 
 def misspellings(messages: list[Message], speller: Speller | None = None, direction: str = "sent",

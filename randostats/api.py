@@ -74,12 +74,24 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         return store.all_messages()
 
     state = {"version": 0}
+    # Aggregates are pure functions of the imported messages, and a quarter of a
+    # million of them take seconds to walk. Compute each view once per import.
+    derived: dict[tuple, object] = {}
 
     def messages():
         return messages_cache(state["version"])
 
+    def remember(name: str, compute, **params):
+        key = (state["version"], name, tuple(sorted(params.items())))
+        if key not in derived:
+            if len(derived) > 256:  # a very long session with many filters
+                derived.clear()
+            derived[key] = compute()
+        return derived[key]
+
     def bump():
         state["version"] += 1
+        derived.clear()
 
     # -- static ---------------------------------------------------------------
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -148,19 +160,19 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     # -- stats ----------------------------------------------------------------
     @app.get("/api/stats/overview")
     def overview():
-        return stats.overview(messages())
+        return remember("overview", lambda: stats.overview(messages()))
 
     @app.get("/api/stats/contacts")
     def contacts(limit: int | None = None):
-        return stats.contact_frequency(messages(), limit=limit)
+        return remember("contacts", lambda: stats.contact_frequency(messages(), limit=limit), limit=limit)
 
     @app.get("/api/stats/timing")
     def timing(contact: str | None = None):
-        return stats.timing(messages(), contact=contact)
+        return remember("timing", lambda: stats.timing(messages(), contact=contact), contact=contact)
 
     @app.get("/api/stats/timing/contacts")
     def timing_contacts(limit: int = 20):
-        return stats.contact_peaks(messages(), limit=limit)
+        return remember("peaks", lambda: stats.contact_peaks(messages(), limit=limit), limit=limit)
 
     @app.get("/api/messages")
     def search_messages(q: str | None = None, word: str | None = None, contact: str | None = None,
@@ -175,31 +187,35 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
 
     @app.get("/api/stats/conversations")
     def conversations(gap_hours: float = 6.0, limit: int | None = None):
-        rows = stats.conversation_health(messages(), gap_hours=gap_hours)
+        rows = remember("health", lambda: stats.conversation_health(messages(), gap_hours=gap_hours), gap=gap_hours)
         # The summary always covers everyone; `limit` only trims what is charted.
         return {"gap_hours": gap_hours, "summary": stats.conversation_summary(rows), "rows": rows[:limit] if limit else rows}
 
     @app.get("/api/stats/members")
     def members(contact: str):
-        return stats.group_members(messages(), contact)
+        return remember("members", lambda: stats.group_members(messages(), contact), contact=contact)
 
     @app.get("/api/stats/misspellings")
     def misspellings(direction: str = "sent", limit: int = 50, contact: str | None = None):
         if direction not in ("sent", "received"):
             raise HTTPException(400, "direction must be sent or received")
-        return stats.misspellings(messages(), speller(), direction=direction, limit=limit, contact=contact)
+        return remember("misspellings", lambda: stats.misspellings(messages(), speller(), direction=direction,
+                                                                   limit=limit, contact=contact),
+                        direction=direction, limit=limit, contact=contact)
 
     @app.get("/api/stats/emoji")
     def emoji(limit: int = 30, contact: str | None = None):
-        return stats.emoji_stats(messages(), limit=limit, contact=contact)
+        return remember("emoji", lambda: stats.emoji_stats(messages(), limit=limit, contact=contact),
+                        limit=limit, contact=contact)
 
     @app.get("/api/stats/tone")
     def tone(contact: str | None = None):
-        return stats.tone(messages(), contact=contact)
+        return remember("tone", lambda: stats.tone(messages(), contact=contact), contact=contact)
 
     @app.get("/api/stats/words")
     def words(direction: str | None = None, limit: int = 50):
-        return stats.word_frequency(messages(), direction=direction, limit=limit)
+        return remember("words", lambda: stats.word_frequency(messages(), direction=direction, limit=limit),
+                        direction=direction, limit=limit)
 
     @app.get("/api/wrapped")
     def wrapped(year: int | None = None):
@@ -207,7 +223,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         available = stats.years(msgs)
         if year is None and available:
             year = available[-1]
-        card = stats.wrapped(msgs, year=year, speller=speller())
+        card = dict(remember("wrapped", lambda: stats.wrapped(msgs, year=year, speller=speller()), year=year))
         # Tie the two halves of the app together: answer one of your own
         # percentages with a real statistic of the same size.
         if not card.get("empty"):
