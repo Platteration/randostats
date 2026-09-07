@@ -113,3 +113,29 @@ def test_search_word_is_whole_word_only():
     msgs = [msg("Alex", "sent", t, "i ate a sandwich"), msg("Alex", "sent", t, "wich one?")]
     assert stats.search(msgs, word="wich")["total"] == 1
     assert stats.search(msgs, q="wich")["total"] == 2
+
+
+def test_emoji_stats_keeps_compound_glyphs_whole():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "family 👨‍👩‍👧‍👦 time 😂😂"),
+            msg("Alex", "received", t, "flag 🇬🇧 and a wave 👋🏽")]
+    e = stats.emoji_stats(msgs)
+    counts = {row["emoji"]: row["count"] for row in e["top"]}
+    assert counts["😂"] == 2
+    assert counts["👨‍👩‍👧‍👦"] == 1  # one glyph, not four people
+    assert counts["🇬🇧"] == 1  # one flag, not two letters
+    assert counts["👋🏽"] == 1  # skin tone stays attached
+    assert e["total"] == 5 and e["share_of_messages"] == 1.0
+    assert e["yours"][0]["emoji"] == "😂"
+
+
+def test_tone_scores_and_splits_by_month():
+    msgs = [msg("Alex", "sent", datetime(2024, 1, 5, 9), "love this, thanks!"),
+            msg("Alex", "received", datetime(2024, 2, 5, 9), "awful terrible day"),
+            msg("Alex", "sent", datetime(2024, 2, 6, 9), "no numbers here")]
+    t = stats.tone(msgs)
+    assert t["positive"] == 2 and t["negative"] == 3  # "no" counts as a cold word
+    assert [m["month"] for m in t["by_month"]] == ["2024-01", "2024-02"]
+    assert t["by_month"][0]["net"] == 1.0 and t["by_month"][1]["net"] < 0
+    assert t["by_contact"][0]["contact"] == "Alex"
+    assert {w["word"] for w in t["top_positive"]} == {"love", "thanks"}

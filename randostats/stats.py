@@ -470,3 +470,98 @@ def search(messages: list[Message], q: str | None = None, word: str | None = Non
         "messages": [{"contact": m.contact, "sender": m.sender, "direction": m.direction,
                       "timestamp": m.timestamp.isoformat(sep=" "), "text": m.text} for m in page],
     }
+
+
+# ---------------------------------------------------------------------------
+# Emoji and tone
+# ---------------------------------------------------------------------------
+
+def emoji_stats(messages: list[Message], limit: int = 30, contact: str | None = None) -> dict:
+    """Emoji counts overall, per direction, and per person."""
+    from .lexicon import EMOJI
+
+    counts: dict[str, Counter] = {"sent": Counter(), "received": Counter()}
+    by_contact: dict[str, Counter] = defaultdict(Counter)
+    carriers = 0
+    considered = 0
+    for m in messages:
+        if contact and m.contact != contact:
+            continue
+        considered += 1
+        found = EMOJI.findall(m.text)
+        if not found:
+            continue
+        carriers += 1
+        counts[m.direction].update(found)
+        by_contact[m.contact].update(found)
+    total = sum(c.total() for c in counts.values())
+    combined = counts["sent"] + counts["received"]
+    return {
+        "total": total,
+        "unique": len(combined),
+        "messages_with_emoji": carriers,
+        "share_of_messages": round(carriers / considered, 3) if considered else 0,
+        "top": [{"emoji": e, "count": c, "sent": counts["sent"][e], "received": counts["received"][e]}
+                for e, c in combined.most_common(limit)],
+        "yours": [{"emoji": e, "count": c} for e, c in counts["sent"].most_common(5)],
+        "theirs": [{"emoji": e, "count": c} for e, c in counts["received"].most_common(5)],
+        "by_contact": sorted(
+            ({"contact": name, "count": c.total(), "top": [e for e, _ in c.most_common(5)]} for name, c in by_contact.items()),
+            key=lambda r: r["count"], reverse=True)[:limit],
+    }
+
+
+def tone(messages: list[Message], contact: str | None = None) -> dict:
+    """Counts of positive and negative tone words, by month and by person.
+
+    Net is (positive - negative) / (positive + negative), so it runs -1 to 1.
+    It is a word count. It cannot see sarcasm, negation, or context.
+    """
+    from .lexicon import NEGATIVE, POSITIVE
+
+    months: dict[str, Counter] = defaultdict(Counter)
+    people: dict[str, Counter] = defaultdict(Counter)
+    hits: dict[str, Counter] = {"positive": Counter(), "negative": Counter()}
+    totals = Counter()
+    for m in messages:
+        if contact and m.contact != contact:
+            continue
+        if is_media_placeholder(m.text):
+            continue
+        pos = neg = 0
+        for w in words_of(m.text):
+            lw = w.lower()
+            if lw in POSITIVE:
+                pos += 1
+                hits["positive"][lw] += 1
+            elif lw in NEGATIVE:
+                neg += 1
+                hits["negative"][lw] += 1
+        if not (pos or neg):
+            continue
+        key = m.timestamp.strftime("%Y-%m")
+        months[key]["positive"] += pos
+        months[key]["negative"] += neg
+        people[m.contact]["positive"] += pos
+        people[m.contact]["negative"] += neg
+        people[m.contact][m.direction] += pos + neg
+        totals["positive"] += pos
+        totals["negative"] += neg
+
+    def net(c: Counter) -> float:
+        span = c["positive"] + c["negative"]
+        return round((c["positive"] - c["negative"]) / span, 3) if span else 0.0
+
+    return {
+        "positive": totals["positive"],
+        "negative": totals["negative"],
+        "net": net(totals),
+        "by_month": [{"month": k, "positive": v["positive"], "negative": v["negative"], "net": net(v)}
+                     for k, v in sorted(months.items())],
+        "by_contact": sorted(
+            ({"contact": name, "positive": v["positive"], "negative": v["negative"], "net": net(v),
+              "words": v["positive"] + v["negative"]} for name, v in people.items()),
+            key=lambda r: r["words"], reverse=True),
+        "top_positive": [{"word": w, "count": c} for w, c in hits["positive"].most_common(15)],
+        "top_negative": [{"word": w, "count": c} for w, c in hits["negative"].most_common(15)],
+    }

@@ -14,7 +14,7 @@
     <button data-tab="convo">Conversations</button>
     <button data-tab="timing">Timing</button>
     <button data-tab="spelling">Spelling</button>
-    <button data-tab="words">Words</button>
+    <button data-tab="words">Words &amp; tone</button>
     <button data-tab="counter">Counterpoint</button>
     <button data-tab="import">Import</button>
   </nav>
@@ -86,7 +86,22 @@
 
   <section id="tab-words" class="tab">
     <div class="filters"><label>Direction <select id="words-direction"><option value="">Both</option><option value="sent">Sent by you</option><option value="received">Received</option></select></label></div>
-    <div class="card"><div class="card-head"><h2>Most used words</h2><button class="ghost" data-toggle-table="words-chart">Table</button></div><div id="words-chart" class="chart"></div></div>
+    <div class="card"><div class="card-head"><h2>Most used words</h2><span class="muted">click any bar to read the messages</span><button class="ghost" data-toggle-table="words-chart">Table</button></div><div id="words-chart" class="chart"></div></div>
+    <div class="kpis" id="emoji-kpis"></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Emoji</h2><button class="ghost" data-toggle-table="emoji-chart">Table</button></div>
+        <div class="legend"><span><i class="sw s1"></i>Sent by you</span><span><i class="sw s2"></i>Received</span></div>
+        <div id="emoji-chart" class="chart"></div></div>
+      <div class="card"><div class="card-head"><h2>Emoji by person</h2></div><div id="emoji-by"></div></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>Tone words over time</h2>
+        <span class="muted">counts of warm minus cold words, -1 to 1. A word list, not a mood reading: it cannot see sarcasm or "not great".</span>
+        <button class="ghost" data-toggle-table="tone-chart">Table</button></div>
+      <div id="tone-chart" class="chart"></div></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Tone by person</h2><button class="ghost" data-toggle-table="tone-people">Table</button></div><div id="tone-people" class="chart"></div></div>
+      <div class="card"><div class="card-head"><h2>The words behind it</h2></div><div id="tone-words"></div></div>
+    </div>
   </section>
 
   <section id="tab-counter" class="tab">

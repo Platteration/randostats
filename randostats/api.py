@@ -148,6 +148,14 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
             raise HTTPException(400, "direction must be sent or received")
         return stats.misspellings(messages(), speller(), direction=direction, limit=limit, contact=contact)
 
+    @app.get("/api/stats/emoji")
+    def emoji(limit: int = 30, contact: str | None = None):
+        return stats.emoji_stats(messages(), limit=limit, contact=contact)
+
+    @app.get("/api/stats/tone")
+    def tone(contact: str | None = None):
+        return stats.tone(messages(), contact=contact)
+
     @app.get("/api/stats/words")
     def words(direction: str | None = None, limit: int = 50):
         return stats.word_frequency(messages(), direction=direction, limit=limit)

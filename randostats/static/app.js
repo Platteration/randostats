@@ -44,7 +44,7 @@
   // Horizontal stacked bars (two series) with a direct total label at the tip.
   const clickable = (node, fn, row) => { if (!fn) return; node.classList.add("clickable"); node.addEventListener("click", () => fn(row)); };
 
-  function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150, onClick }) {
+  function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150, labelSize, onClick }) {
     container.innerHTML = "";
     if (!rows.length) { container.innerHTML = '<div class="empty">Nothing to plot. Import an export on the Import tab.</div>'; return; }
     const right = 70, rowH = 30, barH = 22, top = 8, maxChars = Math.floor(labelW / 7);
@@ -61,7 +61,8 @@
     rows.forEach((r, i) => {
       const y = top + i * rowH + (rowH - barH) / 2;
       const g = el("g", { class: "slot" });
-      g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+      g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 5, "text-anchor": "end", ...(labelSize ? { style: `font-size:${labelSize}px` } : {}) },
+        r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
       let x = labelW;
       const total = series.reduce((a, s) => a + r[s], 0);
       series.forEach((s, j) => {
@@ -232,6 +233,62 @@
     container._table = () => table([key, a, b], usable, ["Person", ...labels]);
   }
 
+  // Values with a sign. Two hues that read as opposite, a neutral zero line,
+  // one shared scale either side so the arms stay comparable.
+  function diverging(container, rows, { key, value, xLabel, horizontal = false, onClick, unit = "" }) {
+    container.innerHTML = "";
+    const usable = rows.filter(r => r[value] != null);
+    if (!usable.length) { container.innerHTML = '<div class="empty">No tone words in this slice.</div>'; return; }
+    const max = niceMax(Math.max(...usable.map(r => Math.abs(r[value])), 0.2));
+    const pos = "var(--c1)", neg = "var(--c8)";
+    const svg = el("svg", { role: "img" });
+    if (horizontal) {
+      const labelW = 150, right = 50, rowH = 28, barH = 18, top = 8, maxChars = Math.floor(labelW / 7);
+      const width = Math.max(560, container.clientWidth || 560), plotW = width - labelW - right, mid = labelW + plotW / 2;
+      svg.setAttribute("viewBox", `0 0 ${width} ${top + usable.length * rowH + 22}`); svg.setAttribute("width", width);
+      const X = (v) => mid + (plotW / 2) * v / max;
+      [-max, -max / 2, 0, max / 2, max].forEach(v => {
+        svg.appendChild(el("line", { x1: X(v), x2: X(v), y1: top, y2: top + usable.length * rowH, stroke: v === 0 ? "var(--axis)" : "var(--grid)", "shape-rendering": "crispEdges" }));
+        svg.appendChild(el("text", { x: X(v), y: top + usable.length * rowH + 16, "text-anchor": "middle", class: "tick" }, (v > 0 ? "+" : "") + v.toFixed(1)));
+      });
+      usable.forEach((r, i) => {
+        const v = r[value], y = top + i * rowH + (rowH - barH) / 2, g = el("g", { class: "slot" });
+        g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+        const x = v >= 0 ? mid : X(v), w = Math.abs(X(v) - mid);
+        g.appendChild(el("path", { d: v >= 0 ? roundedRight(x, y, w, barH, 4) : `M${x + 4},${y} h${w - 4} v${barH} h${-(w - 4)} a4,4 0 0 1 -4,-4 v${-(barH - 8)} a4,4 0 0 1 4,-4 z`,
+          class: "bar", fill: v >= 0 ? pos : neg, style: `animation:none` }));
+        g.appendChild(el("text", { x: v >= 0 ? X(v) + 6 : X(v) - 6, y: y + barH / 2 + 4, "text-anchor": v >= 0 ? "start" : "end", class: "val" }, (v > 0 ? "+" : "") + v.toFixed(2)));
+        const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
+        hover(hit, `<b>${r[key]}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}${r.positive != null ? `<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words` : ""}`);
+        clickable(hit, onClick, r);
+        g.appendChild(hit); svg.appendChild(g);
+      });
+    } else {
+      const width = Math.max(600, container.clientWidth || 600), height = 220, left = 44, top = 12, bottom = 26, right = 8;
+      const plotW = width - left - right, plotH = height - top - bottom, mid = top + plotH / 2;
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`); svg.setAttribute("width", width);
+      const Y = (v) => mid - (plotH / 2) * v / max;
+      [max, max / 2, 0, -max / 2, -max].forEach(v => {
+        svg.appendChild(el("line", { x1: left, x2: left + plotW, y1: Y(v), y2: Y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "shape-rendering": "crispEdges" }));
+        svg.appendChild(el("text", { x: left - 6, y: Y(v) + 4, "text-anchor": "end", class: "tick" }, (v > 0 ? "+" : "") + v.toFixed(1)));
+      });
+      const slot = plotW / usable.length, barW = Math.min(24, slot * 0.7), every = Math.ceil(usable.length / 10);
+      usable.forEach((r, i) => {
+        const v = r[value], x0 = left + i * slot + (slot - barW) / 2, g = el("g", { class: "slot" });
+        const h = Math.abs(Y(v) - mid);
+        g.appendChild(el("path", { d: v >= 0 ? roundedTop(x0, Y(v), barW, h, 4) : `M${x0},${mid} h${barW} v${h - 4} a4,4 0 0 1 -4,4 h${-(barW - 8)} a4,4 0 0 1 -4,-4 z`,
+          class: "bar gy", fill: v >= 0 ? pos : neg, style: v < 0 ? "transform-origin: center top" : "" }));
+        if (i % every === 0 || i === usable.length - 1) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
+        const hit = el("rect", { x: left + i * slot, y: top, width: slot, height: plotH, class: "hit" });
+        hover(hit, `<b>${xLabel ? xLabel(r) : r[key]}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words`);
+        clickable(hit, onClick, r);
+        g.appendChild(hit); svg.appendChild(g);
+      });
+    }
+    container.appendChild(svg);
+    container._table = () => table([key, "positive", "negative", value], usable, [key[0].toUpperCase() + key.slice(1), "Warm words", "Cold words", "Net tone"]);
+  }
+
   function sparkline(values, stroke = "var(--s1)", w = 96, h = 20) {
     const max = Math.max(1, ...values);
     const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * (h - 2) - 1}`);
@@ -396,11 +453,39 @@
       rows.map(r => `<tr><td>${dot(r[k])}${r[k]}</td><td class="num">${fmt(r.misspelled)}</td><td>${r.top.join(", ")}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
   };
 
-  render.words = async () => {
+  render.words = render.emoji = render.tone = async () => {
     const dir = $("#words-direction").value;
-    const rows = await api(`/api/stats/words?limit=30` + (dir ? `&direction=${dir}` : ""));
+    const scope = dir ? { direction: dir } : {};
+    const [rows, em, tn] = await Promise.all([
+      api(`/api/stats/words?limit=30` + (dir ? `&direction=${dir}` : "")),
+      api("/api/stats/emoji?limit=24"),
+      api("/api/stats/tone"),
+    ]);
     chartOrTable("words-chart", (c) => hbars(c, rows, { key: "word", keyLabel: "Word", series: ["count"], labels: ["Times"],
-      onClick: (w) => openDrawer(`“${w.word}”`, { word: w.word, ...(dir ? { direction: dir } : {}) }) }));
+      onClick: (w) => openDrawer(`“${w.word}”`, { word: w.word, ...scope }) }));
+
+    $("#emoji-kpis").innerHTML = em.total ? [
+      kpi("Emoji sent and received", fmt(em.total), `${em.unique} different ones`),
+      kpi("Messages with emoji", pct(em.share_of_messages), "of everything"),
+      kpi("Your favourite", em.yours[0] ? em.yours[0].emoji : "none", em.yours[0] ? `${fmt(em.yours[0].count)} times` : "you type in words"),
+      kpi("Theirs", em.theirs[0] ? em.theirs[0].emoji : "none", em.theirs[0] ? `${fmt(em.theirs[0].count)} times` : "they type in words"),
+    ].join("") : kpi("Emoji", "0", "not a single one, which is its own personality");
+    chartOrTable("emoji-chart", (c) => hbars(c, em.top, { key: "emoji", keyLabel: "Emoji", labelW: 60, labelSize: 17, series: ["sent", "received"], labels: ["Sent by you", "Received"],
+      onClick: (e) => openDrawer(e.emoji, { q: e.emoji }) }));
+    $("#emoji-by").innerHTML = em.by_contact.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Emoji</th><th>Favourites</th></tr></thead><tbody>` +
+      em.by_contact.map(r => `<tr><td>${dot(r.contact)}${r.contact}</td><td class="num">${fmt(r.count)}</td><td>${r.top.join(" ")}</td></tr>`).join("") + "</tbody></table>"
+      : '<div class="empty">No emoji anywhere.</div>';
+
+    chartOrTable("tone-chart", (c) => diverging(c, tn.by_month, { key: "month", value: "net",
+      onClick: (r) => openDrawer(`Tone in ${r.month}`, { month: r.month }) }));
+    chartOrTable("tone-people", (c) => diverging(c, tn.by_contact.slice(0, 12), { key: "contact", value: "net", horizontal: true,
+      onClick: (r) => openDrawer(r.contact, { contact: r.contact }) }));
+    const toneTable = (list, heading) => `<table class="data"><thead><tr><th>${heading}</th><th class="num">Times</th></tr></thead><tbody>` +
+      list.map(w => `<tr class="clickable" data-word="${esc(w.word)}"><td>${w.word}</td><td class="num">${fmt(w.count)}</td></tr>`).join("") + "</tbody></table>";
+    $("#tone-words").innerHTML = tn.top_positive.length || tn.top_negative.length
+      ? `<div class="grid2"><div>${toneTable(tn.top_positive.slice(0, 8), "Warm")}</div><div>${toneTable(tn.top_negative.slice(0, 8), "Cold")}</div></div>`
+      : '<div class="empty">No tone words found.</div>';
+    $$("#tone-words tr[data-word]").forEach(tr => tr.addEventListener("click", () => openDrawer(`“${tr.dataset.word}”`, { word: tr.dataset.word })));
   };
 
   // ---------- counterpoint ----------

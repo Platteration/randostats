@@ -26,6 +26,9 @@ LINES_OK = [
     "I think most people would agree", "seventy percent of people drink beer so it's fine", "1 in 5 adults have a tattoo",
     "what are you doing this weekend", "hiking maybe", "sounds good", "brb", "omg", "bring snacks", "on my way",
     "coffee tomorrow?", "definitely", "let me check", "ok cool", "<Media omitted>", "thanks!!", "you're the best",
+    "love this 😂", "😭😭😭", "amazing news 🎉", "ugh terrible day", "sorry I'm late", "that's hilarious 😂",
+    "so tired", "great work 👏", "miss you", "this is awful", "perfect 👌", "annoying meeting", "thank you 🙏",
+    "🔥🔥", "happy birthday 🎂", "worried about tomorrow", "best day", "hate mondays", "👍", "❤️",
 ]
 LINES_TYPOS = [
     "definately coming", "recieved it thanks", "seperate cars?", "that was wierd", "occassionally", "tommorow works",
