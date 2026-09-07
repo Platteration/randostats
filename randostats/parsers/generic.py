@@ -14,10 +14,11 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Iterable
 
 from ..models import Message
+from .timestamps import from_iso, from_unix
 
 _ALIASES = {
     "contact": ("contact", "chat", "conversation", "thread", "name", "chat_name"),
@@ -43,17 +44,13 @@ def parse_timestamp(value: Any) -> datetime | None:
         v = float(value)
         if v > 1e11:  # milliseconds
             v /= 1000.0
-        return datetime.fromtimestamp(v, tz=timezone.utc).replace(tzinfo=None)
+        return from_unix(v)
     s = str(value).strip()
     if s.replace(".", "", 1).isdigit():
         return parse_timestamp(float(s))
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-        return dt
-    except ValueError:
-        pass
+    parsed = from_iso(s)
+    if parsed is not None:
+        return parsed
     for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%m/%d/%y %H:%M", "%d/%m/%Y %H:%M",
                 "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%b %d, %Y %I:%M %p", "%B %d, %Y at %I:%M %p"):
         try:

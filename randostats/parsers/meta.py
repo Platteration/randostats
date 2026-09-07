@@ -13,11 +13,12 @@ Meta writes UTF-8 bytes escaped as Latin-1, so "café" arrives as "cafÃ©".
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable
 
 from ..models import Message
 from . import archive
+from .timestamps import from_unix_ms
 
 
 def mojibake(text: str) -> str:
@@ -30,8 +31,8 @@ def mojibake(text: str) -> str:
 
 def _timestamp(ms) -> datetime | None:
     try:
-        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).replace(tzinfo=None)
-    except (TypeError, ValueError, OverflowError):
+        return from_unix_ms(int(ms))
+    except (TypeError, ValueError):
         return None
 
 

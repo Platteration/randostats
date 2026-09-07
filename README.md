@@ -86,6 +86,18 @@ statistics, so every number shown still traces to a listed source. Requests use
 `claude-opus-5` with refusal fallbacks enabled; set `RANDOSTATS_MODEL` to change
 the model.
 
+## Timestamps
+
+Exports disagree about what a timestamp means. WhatsApp and Telegram write the
+wall-clock time the sender saw; iMessage, Android SMS, Discord and Meta write
+an instant in UTC. Everything is normalised to local wall-clock time on the
+machine doing the import, so the same 7pm message reads as 7pm whichever app
+it came from. That is what "when do you talk to people" means, and it matches
+what the chat app showed at the time.
+
+If you imported before this was fixed, re-import: the old rows hold UTC and
+will sit a few hours off in the hour-of-day charts.
+
 ## Accessibility
 
 Every chart is one tab stop. Arrow keys walk its marks, Home and End jump to

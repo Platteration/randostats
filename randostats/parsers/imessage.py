@@ -10,13 +10,12 @@ from __future__ import annotations
 import re
 import sqlite3
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from ..models import Message
-
-_APPLE_EPOCH = datetime(2001, 1, 1)
+from .timestamps import from_apple
 
 _QUERY = """
 SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody,
@@ -33,9 +32,9 @@ def _apple_date(raw: int | float | None) -> datetime | None:
     if raw is None:
         return None
     raw = float(raw)
-    if raw > 1e12:  # nanoseconds
+    if raw > 1e12:  # nanoseconds on modern macOS
         raw /= 1e9
-    return _APPLE_EPOCH + timedelta(seconds=raw)
+    return from_apple(raw)
 
 
 def _decode_attributed_body(blob: bytes | None) -> str:

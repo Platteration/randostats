@@ -751,8 +751,12 @@
   }
   render.counter = async () => { if (!$("#pack-chips").children.length) renderPacks(await api("/api/counterpoint/packs")); };
 
-  $("#counter-go").addEventListener("click", () => counter($("#counter-text").value));
-  $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value); });
+  const counterFailed = (err) => {
+    $("#counter-results").insertAdjacentHTML("afterbegin",
+      `<div class="cp"><div class="claim">Something broke</div><div class="punch">${esc(err.message)}</div></div>`);
+  };
+  $("#counter-go").addEventListener("click", () => counter($("#counter-text").value).catch(counterFailed));
+  $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value).catch(counterFailed); });
   $("#counter-random").addEventListener("click", async () => {
     const p = await api("/api/counterpoint/random");
     $("#counter-results").insertAdjacentHTML("afterbegin", `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>
@@ -773,7 +777,7 @@
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) { finalText += t + " "; counter(t, { live: true }); } else interim += t;
+        if (e.results[i].isFinal) { finalText += t + " "; counter(t, { live: true }).catch(() => {}); } else interim += t;
       }
       $("#transcript").textContent = finalText + interim;
     };
@@ -813,6 +817,28 @@
   });
 
   // ---------- tabs & refresh ----------
+  // A failed fetch used to leave a blank panel and an error only in the console.
+  const showFailure = (name, err) => {
+    const panel = $("#tab-" + name);
+    if (!panel) return;
+    let banner = panel.querySelector(".failure");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.className = "failure";
+      banner.setAttribute("role", "alert");
+      panel.prepend(banner);
+    }
+    banner.textContent = `Could not load this view: ${err.message}. The app is still running; try again.`;
+    say(banner.textContent);
+  };
+
+  const runRender = (name) => {
+    const fn = render[name];
+    if (!fn) return;
+    $("#tab-" + name)?.querySelector(".failure")?.remove();
+    Promise.resolve().then(fn).catch(err => showFailure(name, err));
+  };
+
   const switchTab = (name) => {
     $$(".tabs button").forEach(b => {
       const on = b.dataset.tab === name;
@@ -821,7 +847,7 @@
     });
     $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
     location.hash = name;
-    (render[name] || (() => {}))();
+    runRender(name);
   };
   $$(".tabs button").forEach((b, idx, all) => {
     b.setAttribute("role", "tab");

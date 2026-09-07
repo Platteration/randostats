@@ -9,21 +9,16 @@ import accordingly rather than inventing the other half of the conversation.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable
 
 from ..models import Message
 from . import archive
+from .timestamps import from_iso
 
 
 def _timestamp(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+    return from_iso(raw) if raw else None
 
 
 def _channel_name(meta: dict | None, fallback: str) -> str:

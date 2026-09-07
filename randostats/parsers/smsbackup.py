@@ -8,18 +8,19 @@ MMS entries carry their text in nested ``<part ct="text/plain" text="..."/>``.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable
 
 from ..models import Message
+from .timestamps import from_unix_ms
 
 
 def _ts(ms: str | None) -> datetime | None:
     if not ms:
         return None
     try:
-        return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-    except (ValueError, OverflowError):
+        return from_unix_ms(int(ms))
+    except ValueError:
         return None
 
 

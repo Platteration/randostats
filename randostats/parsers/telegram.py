@@ -15,11 +15,12 @@ entities for links and formatting. Service entries (joins, calls, pins) carry
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable
 
 from ..models import Message
 from . import archive
+from .timestamps import from_iso, from_unix
 
 SKIP_CHAT_TYPES = {"public_channel", "private_channel", "public_supergroup"}
 
@@ -39,16 +40,17 @@ def _flatten(text) -> str:
 
 
 def _timestamp(entry: dict) -> datetime | None:
+    """``date`` is the wall-clock time the exporter saw, which is what we want.
+    ``date_unixtime`` is the same instant in UTC and only used as a fallback."""
+    raw = entry.get("date")
+    if isinstance(raw, str):
+        moment = from_iso(raw)
+        if moment is not None:
+            return moment
     unix = entry.get("date_unixtime")
     if unix is not None:
         try:
-            return datetime.fromtimestamp(int(unix), tz=timezone.utc).replace(tzinfo=None)
-        except (ValueError, OverflowError):
-            pass
-    raw = entry.get("date")
-    if isinstance(raw, str):
-        try:
-            return datetime.fromisoformat(raw)
+            return from_unix(int(unix))
         except ValueError:
             return None
     return None
