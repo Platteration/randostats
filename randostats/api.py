@@ -19,6 +19,15 @@ from .store import DEFAULT_DB, Store
 
 STATIC = Path(__file__).with_name("static")
 
+# Imported files are other people's data, and a contact name can hold markup.
+# The front end escapes everything it renders; this header is the second line,
+# so an injected tag cannot run script even if an escape is ever missed.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+
+MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024 * 1024
+
 
 class PackConfig(BaseModel):
     """Which fact packs are loaded and which voice writes the punchlines."""
@@ -36,6 +45,14 @@ class CounterRequest(BaseModel):
 
 def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) -> FastAPI:
     app = FastAPI(title="randostats", version="0.1.0")
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", CSP)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
     store = Store(db_path)
 
     def build_engine() -> CounterpointEngine:
@@ -91,6 +108,9 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         data = await file.read()
         if not data:
             raise HTTPException(400, "empty file")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit; "
+                                     "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
         if fmt == "auto":
             fmt = parsers.detect_format(file.filename or "", data) or ""
             if not fmt:
@@ -100,6 +120,8 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
                 msgs = list(parsers.whatsapp.parse(data, self_name, contact=contact))
             else:
                 msgs = parsers.parse(fmt, data, self_name)
+        except parsers.archive.ArchiveTooLarge as exc:
+            raise HTTPException(413, str(exc)) from exc
         except Exception as exc:  # parser errors are user-facing
             raise HTTPException(400, f"could not parse as {fmt}: {exc}") from exc
         if not msgs:

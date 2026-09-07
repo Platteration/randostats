@@ -76,7 +76,7 @@
       });
       g.appendChild(el("text", { x: x + 6, y: y + barH / 2 + 4, class: "val" }, fmt(total)));
       const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
-      hover(hit, tipFn ? tipFn(r) : `<b>${r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      hover(hit, tipFn ? tipFn(r) : `<b>${esc(r[key])}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
       clickable(hit, onClick, r);
       g.appendChild(hit);
       svg.appendChild(g);
@@ -118,7 +118,7 @@
       });
       if (i % every === 0) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
       const hit = el("rect", { x: left + i * slot, y: top, width: slot, height: plotH, class: "hit" });
-      hover(hit, `<b>${xLabel ? xLabel(r) : r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      hover(hit, `<b>${esc(xLabel ? xLabel(r) : r[key])}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
       clickable(hit, onClick, r);
       g.appendChild(hit);
       svg.appendChild(g);
@@ -160,7 +160,7 @@
       const px = (e.clientX - rect.left) * width / rect.width;
       const i = Math.max(0, Math.min(lastI, Math.round((px - left) / plotW * lastI)));
       cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(rows[i][value]));
-      showTip(e, `<b>${rows[i][key]}</b><br>${label}: ${fmt(rows[i][value])}`);
+      showTip(e, `<b>${esc(rows[i][key])}</b><br>${label}: ${fmt(rows[i][value])}`);
     });
     hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("x1", -10); cross.setAttribute("x2", -10); dot.setAttribute("cx", -10); });
     if (onClick) {
@@ -191,7 +191,7 @@
       row.forEach((v, h) => {
         const idx = v === 0 ? -1 : Math.min(steps.length - 1, Math.floor(Math.sqrt(v / max) * steps.length));
         const rect = el("rect", { x: left + h * (cell + gap), y: top + d * (cell + gap), width: cell, height: cell, rx: 3, fill: idx < 0 ? "var(--grid)" : `var(${steps[idx]})` });
-        hover(rect, `<b>${days[d]} ${h}:00–${h + 1}:00</b><br>${fmt(v)} messages`);
+        hover(rect, `<b>${esc(days[d])} ${h}:00–${h + 1}:00</b><br>${fmt(v)} messages`);
         if (v) clickable(rect, onClick, { weekday: d, hour: h, count: v, label: `${days[d]} ${h}:00` });
         svg.appendChild(rect);
       });
@@ -225,7 +225,7 @@
       if (r[a] != null) g.appendChild(el("circle", { cx: X(r[a]), cy: y, r: 5, fill: "var(--s1)", stroke: "var(--surface-1)", "stroke-width": 2 }));
       if (r[b] != null) g.appendChild(el("circle", { cx: X(r[b]), cy: y, r: 5, fill: "var(--s2)", stroke: "var(--surface-1)", "stroke-width": 2 }));
       const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
-      hover(hit, `<b>${r[key]}</b><br>${labels[0]}: ${r[a] == null ? "n/a" : fmt(r[a]) + unit}<br>${labels[1]}: ${r[b] == null ? "n/a" : fmt(r[b]) + unit}`);
+      hover(hit, `<b>${esc(r[key])}</b><br>${labels[0]}: ${r[a] == null ? "n/a" : fmt(r[a]) + unit}<br>${labels[1]}: ${r[b] == null ? "n/a" : fmt(r[b]) + unit}`);
       g.appendChild(hit);
       svg.appendChild(g);
     });
@@ -259,7 +259,7 @@
           class: "bar", fill: v >= 0 ? pos : neg, style: `animation:none` }));
         g.appendChild(el("text", { x: v >= 0 ? X(v) + 6 : X(v) - 6, y: y + barH / 2 + 4, "text-anchor": v >= 0 ? "start" : "end", class: "val" }, (v > 0 ? "+" : "") + v.toFixed(2)));
         const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
-        hover(hit, `<b>${r[key]}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}${r.positive != null ? `<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words` : ""}`);
+        hover(hit, `<b>${esc(r[key])}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}${r.positive != null ? `<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words` : ""}`);
         clickable(hit, onClick, r);
         g.appendChild(hit); svg.appendChild(g);
       });
@@ -280,7 +280,7 @@
           class: "bar gy", fill: v >= 0 ? pos : neg, style: v < 0 ? "transform-origin: center top" : "" }));
         if (i % every === 0 || i === usable.length - 1) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
         const hit = el("rect", { x: left + i * slot, y: top, width: slot, height: plotH, class: "hit" });
-        hover(hit, `<b>${xLabel ? xLabel(r) : r[key]}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words`);
+        hover(hit, `<b>${esc(xLabel ? xLabel(r) : r[key])}</b><br>Net tone: ${(v > 0 ? "+" : "") + v.toFixed(2)}<br>${fmt(r.positive)} warm · ${fmt(r.negative)} cold words`);
         clickable(hit, onClick, r);
         g.appendChild(hit); svg.appendChild(g);
       });
@@ -297,10 +297,11 @@
 
   function table(cols, rows, labels) {
     const head = cols.map((c, i) => `<th class="${typeof rows[0]?.[c] === "number" ? "num" : ""}">${labels[i] || c}</th>`).join("");
-    const body = rows.map(r => `<tr>${cols.map(c => `<td class="${typeof r[c] === "number" ? "num" : ""}">${typeof r[c] === "number" ? fmt(r[c]) : r[c]}</td>`).join("")}</tr>`).join("");
+    const body = rows.map(r => `<tr>${cols.map(c => `<td class="${typeof r[c] === "number" ? "num" : ""}">${typeof r[c] === "number" ? fmt(r[c]) : esc(r[c])}</td>`).join("")}</tr>`).join("");
     const t = document.createElement("table"); t.className = "data"; t.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`; return t;
   }
-  const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+  // Values reaching a tile can come from an imported file, so they are escaped here.
+  const kpi = (label, value, sub = "") => `<div class="kpi"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`;
 
   // Table / chart toggle buttons.
   document.addEventListener("click", (e) => {
@@ -368,12 +369,12 @@
     const shown = lim ? rows.slice(0, lim) : rows;
     chartOrTable("people-chart", (c) => hbars(c, shown, {
       key: "contact", keyLabel: "Person", series: ["sent", "received"], labels: ["Sent by you", "Received"],
-      tipFn: (r) => `<b>${r.contact}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>click to read them</i>`,
+      tipFn: (r) => `<b>${esc(r.contact)}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>click to read them</i>`,
       onClick: (r) => openDrawer(r.contact, { contact: r.contact }),
     }));
     const wordy = [...shown].sort((a, b) => b.avg_words_received - a.avg_words_received).slice(0, 12);
     hbars($("#people-words"), wordy, { key: "contact", series: ["avg_words_received"], labels: ["Average words per message"], colors: ["s2"],
-      tipFn: (r) => `<b>${r.contact}</b><br>Their average: ${r.avg_words_received} words<br>Your average to them: ${r.avg_words_sent} words` });
+      tipFn: (r) => `<b>${esc(r.contact)}</b><br>Their average: ${r.avg_words_received} words<br>Your average to them: ${r.avg_words_sent} words` });
   };
 
   render.hour = render.weekday = render.month = render.timing = async () => {
@@ -393,7 +394,7 @@
       onClick: (r) => openDrawer(`${contact || "Everyone"} · ${r.month}`, { ...scope, month: r.month }) }));
     const peaks = await api("/api/stats/timing/contacts?limit=15");
     $("#peaks").innerHTML = peaks.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Messages</th><th>Peak day</th><th>Peak hour</th><th>Hours 0–23</th></tr></thead><tbody>` +
-      peaks.map(p => `<tr><td>${dot(p.contact)}${p.contact}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
+      peaks.map(p => `<tr><td>${dot(p.contact)}${esc(p.contact)}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
   };
 
   const mins = (v) => v == null ? "n/a" : v < 60 ? `${Math.round(v)} min` : v < 1440 ? `${(v / 60).toFixed(1)} h` : `${(v / 1440).toFixed(1)} d`;
@@ -411,12 +412,12 @@
     ].join("") : kpi("Conversations", "0", "import something first");
     const top = rows.slice(0, 15);
     chartOrTable("open-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_opened", "they_opened"], labels: ["You opened", "They opened"],
-      tipFn: (r) => `<b>${r.contact}</b><br>You opened: ${fmt(r.you_opened)} (${pct(r.you_opened_share)})<br>They opened: ${fmt(r.they_opened)}<br>${r.avg_conversation} messages per conversation` }));
+      tipFn: (r) => `<b>${esc(r.contact)}</b><br>You opened: ${fmt(r.you_opened)} (${pct(r.you_opened_share)})<br>They opened: ${fmt(r.they_opened)}<br>${r.avg_conversation} messages per conversation` }));
     chartOrTable("close-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_closed", "they_closed"], labels: ["You did", "They did"],
-      tipFn: (r) => `<b>${r.contact}</b><br>You had the last word: ${fmt(r.you_closed)} (${pct(r.you_closed_share)})<br>They did: ${fmt(r.they_closed)}` }));
+      tipFn: (r) => `<b>${esc(r.contact)}</b><br>You had the last word: ${fmt(r.you_closed)} (${pct(r.you_closed_share)})<br>They did: ${fmt(r.they_closed)}` }));
     chartOrTable("reply-chart", (c) => dumbbell(c, top, { key: "contact", a: "you_reply_median", b: "them_reply_median", labels: ["You answer them", "They answer you"], unit: " min" }));
     $("#convo-table").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Conversations</th><th class="num">Your double texts</th><th class="num">Theirs</th><th class="num">Avg length</th><th class="num">Longest silence</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${dot(r.contact)}${r.contact}</td><td class="num">${fmt(r.conversations)}</td><td class="num">${fmt(r.your_double_texts)}</td><td class="num">${fmt(r.their_double_texts)}</td><td class="num">${r.avg_conversation}</td><td class="num">${r.longest_silence_days} d</td></tr>`).join("") + "</tbody></table>"
+      rows.map(r => `<tr><td>${dot(r.contact)}${esc(r.contact)}</td><td class="num">${fmt(r.conversations)}</td><td class="num">${fmt(r.your_double_texts)}</td><td class="num">${fmt(r.their_double_texts)}</td><td class="num">${r.avg_conversation}</td><td class="num">${r.longest_silence_days} d</td></tr>`).join("") + "</tbody></table>"
       : '<div class="empty">Nothing to measure yet.</div>';
     await renderMembers();
   };
@@ -431,7 +432,7 @@
     }
     const rows = await api(`/api/stats/members?contact=${encodeURIComponent(sel.value || groups[0].contact)}`);
     $("#members-table").innerHTML = `<table class="data"><thead><tr><th>Member</th><th class="num">Messages</th><th class="num">Share</th><th class="num">Avg words</th><th class="num">Peak hour</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${r.sender}${r.is_you ? " (you)" : ""}</td><td class="num">${fmt(r.count)}</td><td class="num">${pct(r.share)}</td><td class="num">${r.avg_words}</td><td class="num">${r.peak_hour}:00</td></tr>`).join("") + "</tbody></table>";
+      rows.map(r => `<tr><td>${esc(r.sender)}${r.is_you ? " (you)" : ""}</td><td class="num">${fmt(r.count)}</td><td class="num">${pct(r.share)}</td><td class="num">${r.avg_words}</td><td class="num">${r.peak_hour}:00</td></tr>`).join("") + "</tbody></table>";
   }
 
   render.spell = render.spelling = async () => {
@@ -444,13 +445,13 @@
     ].join("");
     chartOrTable("spell-chart", (c) => hbars(c, s.words.map(w => ({ ...w, label: w.suggestion ? `${w.word} → ${w.suggestion}` : w.word })), {
       key: "label", keyLabel: "Word", labelW: 230, series: ["count"], labels: ["Times"],
-      tipFn: (w) => `<b>${w.word}</b>${w.suggestion ? ` → ${w.suggestion}` : ""}<br>${fmt(w.count)} times<br><i>${w.example.replace(/</g, "&lt;")}</i>`,
+      tipFn: (w) => `<b>${esc(w.word)}</b>${w.suggestion ? ` → ${esc(w.suggestion)}` : ""}<br>${fmt(w.count)} times<br><i>${esc(w.example)}</i>`,
       onClick: (w) => openDrawer(`“${w.word}”`, { word: w.word, direction: dir, ...(contact ? { contact } : {}) }),
     }));
     const rows = dir === "sent" ? s.by_contact : s.by_sender, k = dir === "sent" ? "contact" : "sender";
     $("#spell-by-title").textContent = dir === "sent" ? "Who you misspell things to" : "Who misspells the most";
     $("#spell-by").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Misspellings</th><th>Favourites</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${dot(r[k])}${r[k]}</td><td class="num">${fmt(r.misspelled)}</td><td>${r.top.join(", ")}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
+      rows.map(r => `<tr><td>${dot(r[k])}${esc(r[k])}</td><td class="num">${fmt(r.misspelled)}</td><td>${esc(r.top.join(", "))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
   };
 
   render.words = render.emoji = render.tone = async () => {
@@ -473,7 +474,7 @@
     chartOrTable("emoji-chart", (c) => hbars(c, em.top, { key: "emoji", keyLabel: "Emoji", labelW: 60, labelSize: 17, series: ["sent", "received"], labels: ["Sent by you", "Received"],
       onClick: (e) => openDrawer(e.emoji, { q: e.emoji }) }));
     $("#emoji-by").innerHTML = em.by_contact.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Emoji</th><th>Favourites</th></tr></thead><tbody>` +
-      em.by_contact.map(r => `<tr><td>${dot(r.contact)}${r.contact}</td><td class="num">${fmt(r.count)}</td><td>${r.top.join(" ")}</td></tr>`).join("") + "</tbody></table>"
+      em.by_contact.map(r => `<tr><td>${dot(r.contact)}${esc(r.contact)}</td><td class="num">${fmt(r.count)}</td><td>${esc(r.top.join(" "))}</td></tr>`).join("") + "</tbody></table>"
       : '<div class="empty">No emoji anywhere.</div>';
 
     chartOrTable("tone-chart", (c) => diverging(c, tn.by_month, { key: "month", value: "net",
@@ -481,7 +482,7 @@
     chartOrTable("tone-people", (c) => diverging(c, tn.by_contact.slice(0, 12), { key: "contact", value: "net", horizontal: true,
       onClick: (r) => openDrawer(r.contact, { contact: r.contact }) }));
     const toneTable = (list, heading) => `<table class="data"><thead><tr><th>${heading}</th><th class="num">Times</th></tr></thead><tbody>` +
-      list.map(w => `<tr class="clickable" data-word="${esc(w.word)}"><td>${w.word}</td><td class="num">${fmt(w.count)}</td></tr>`).join("") + "</tbody></table>";
+      list.map(w => `<tr class="clickable" data-word="${esc(w.word)}"><td>${esc(w.word)}</td><td class="num">${fmt(w.count)}</td></tr>`).join("") + "</tbody></table>";
     $("#tone-words").innerHTML = tn.top_positive.length || tn.top_negative.length
       ? `<div class="grid2"><div>${toneTable(tn.top_positive.slice(0, 8), "Warm")}</div><div>${toneTable(tn.top_negative.slice(0, 8), "Cold")}</div></div>`
       : '<div class="empty">No tone words found.</div>';
@@ -599,7 +600,9 @@
   });
 
   // ---------- counterpoint ----------
-  const esc = (s) => String(s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+  // Everything that reaches innerHTML goes through this. Message text, contact
+  // names and senders all come from imported files and are not to be trusted.
+  const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
   function renderCounter(payload, { prepend = false } = {}) {
     const box = $("#counter-results");
     if (!payload.results.length && !prepend) { box.innerHTML = '<div class="empty">No number in there, so nothing to deflate. Try “70% of people…”, “1 in 5…”, “most people…”, or “3 times more likely”.</div>'; return; }
@@ -689,8 +692,9 @@
     $("#import-result").textContent = "importing…";
     try {
       const r = await api("/api/import", { method: "POST", body: fd });
-      $("#import-result").innerHTML = esc(`Parsed ${fmt(r.parsed)} messages as ${r.format}, ${fmt(r.added)} new. ${fmt(r.total)} total. Contacts: ${r.contacts.slice(0, 8).join(", ")}${r.contacts.length > 8 ? "…" : ""}`) +
-        (r.note ? `<div class="note">${esc(r.note)}</div>` : "");
+      const named = r.contacts.slice(0, 8).map(esc).join(", ") + (r.contacts.length > 8 ? "…" : "");
+      $("#import-result").innerHTML = `Parsed ${fmt(r.parsed)} messages as ${esc(r.format)}, ${fmt(r.added)} new. ` +
+        `${fmt(r.total)} total. Contacts: ${named}` + (r.note ? `<div class="note">${esc(r.note)}</div>` : "");
       await refresh();
     } catch (err) { $("#import-result").textContent = "Import failed: " + err.message; }
   });
