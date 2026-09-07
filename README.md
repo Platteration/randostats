@@ -22,7 +22,7 @@ and never leave it.
 | **Words & tone** | Most used words, emoji counts and favourites per person, and warm-minus-cold tone words by month and by person. Tone is a word count, not a mood reading: it cannot see sarcasm or "not great", and the app says so. |
 | **Wrapped** | The year on one 1080 × 1350 card: total messages, who you talk to most, busiest hour, reply times, after-midnight share, longest streak, your word, your emoji, your worst typo. Downloads as a 2× PNG. |
 | **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari). Every claim like "70%", "seventy percent", "1 in 5", "three out of four", "most people", or "3 times more likely" gets one or more sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
-| **Import** | WhatsApp exports, iMessage `chat.db`, Android "SMS Backup & Restore" XML, or generic CSV/JSON. |
+| **Import** | WhatsApp exports, iMessage `chat.db`, Android "SMS Backup & Restore" XML, Telegram JSON, Instagram and Messenger downloads, Discord packages, or generic CSV/JSON. Zips are read in place, and the format is detected for you. |
 
 Every chart has a **Table** toggle and hover tooltips, and follows the viewer's
 light or dark theme. **Click any bar, heatmap cell, word, or point on a line**
@@ -47,8 +47,24 @@ You can also import from the terminal:
 ```bash
 randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
 randostats import ~/Library/Messages/chat.db --me "Me"
+randostats import telegram-export.zip --me "Your Name"
 randostats counter "seventy percent of people drink beer"
 ```
+
+Where to find each export:
+
+| Source | Where |
+|---|---|
+| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
+| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
+| Android SMS | the "SMS Backup & Restore" app's XML file |
+| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
+| Instagram / Messenger | request your information in JSON, then import the zip |
+| Discord | Settings → Data & Privacy → Request all of my data |
+
+Discord only exports what you wrote, so an import from it shows nothing as
+received. The app says so when it notices, rather than letting you read a
+half-empty chart as a fact about your friends.
 
 The database lives at `data/randostats.db` by default; override with `--db` or
 `RANDOSTATS_DB`.
@@ -107,11 +123,14 @@ Layout:
 
 ```
 randostats/
-  parsers/        whatsapp, imessage (chat.db), smsbackup (xml), generic csv/json
-  stats.py        overview, per-contact frequency, timing, reply latency, words, misspellings
-  store.py        SQLite persistence (idempotent imports)
-  counterpoint/   facts.json, engine.py (claims + matching + punchlines), llm.py (optional Claude)
+  parsers/        whatsapp, imessage, smsbackup, telegram, discord, meta, generic csv/json, archive helpers
+  lexicon.py      tone word lists and the emoji pattern
+  stats.py        overview, frequency, timing, reply latency, conversation health, words,
+                  misspellings, emoji, tone, search, wrapped
+  store.py        SQLite persistence (idempotent imports, settings)
+  counterpoint/   facts.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
   api.py          FastAPI routes
-  static/         single-page front end, hand-drawn SVG charts, Web Speech API listening
+  static/         single-page front end, hand-drawn SVG charts, drill-down drawer,
+                  Wrapped card, Web Speech API listening
 samples/          make_sample.py generates fake exports
 ```

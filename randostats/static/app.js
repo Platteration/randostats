@@ -689,7 +689,8 @@
     $("#import-result").textContent = "importing…";
     try {
       const r = await api("/api/import", { method: "POST", body: fd });
-      $("#import-result").textContent = `Parsed ${fmt(r.parsed)} messages as ${r.format}, ${fmt(r.added)} new. ${fmt(r.total)} total. Contacts: ${r.contacts.slice(0, 8).join(", ")}${r.contacts.length > 8 ? "…" : ""}`;
+      $("#import-result").innerHTML = esc(`Parsed ${fmt(r.parsed)} messages as ${r.format}, ${fmt(r.added)} new. ${fmt(r.total)} total. Contacts: ${r.contacts.slice(0, 8).join(", ")}${r.contacts.length > 8 ? "…" : ""}`) +
+        (r.note ? `<div class="note">${esc(r.note)}</div>` : "");
       await refresh();
     } catch (err) { $("#import-result").textContent = "Import failed: " + err.message; }
   });
@@ -717,6 +718,12 @@
     (render[name] || (() => {}))();
   };
   $$(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  // Back, forward, and a pasted #hash link should all land on the right tab.
+  window.addEventListener("hashchange", () => {
+    const tab = location.hash.slice(1);
+    const btn = tab && $(`.tabs button[data-tab="${tab}"]`);
+    if (btn && !btn.classList.contains("active")) switchTab(tab);
+  });
   ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction", "convo-gap"].forEach(id => $("#" + id).addEventListener("change", () => switchTab(location.hash.slice(1) || "people")));
 
   async function refresh() {

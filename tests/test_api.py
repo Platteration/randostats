@@ -19,7 +19,7 @@ WA = "1/2/24, 9:15 PM - Alex: hey are you around\n1/2/24, 9:16 PM - Sam: yeah de
 def test_import_then_stats(client):
     r = client.post("/api/import", files={"file": ("chat.txt", WA.encode())}, data={"self_name": "Sam"})
     assert r.status_code == 200, r.text
-    assert r.json() == {"format": "whatsapp", "parsed": 2, "added": 2, "total": 2, "contacts": ["Alex"]}
+    assert r.json() == {"format": "whatsapp", "parsed": 2, "added": 2, "total": 2, "contacts": ["Alex"], "note": None}
     # re-import is idempotent
     assert client.post("/api/import", files={"file": ("chat.txt", WA.encode())}, data={"self_name": "Sam"}).json()["added"] == 0
     assert client.get("/api/stats/overview").json()["total"] == 2
@@ -125,3 +125,20 @@ def test_pack_choice_survives_a_restart(tmp_path):
         cfg = second.get("/api/counterpoint/packs").json()
         assert cfg["voice"] == "victorian"
         assert {p["id"] for p in cfg["packs"] if p["enabled"]} == {"core", "money"}
+
+
+def test_import_flags_a_one_sided_export(client):
+    rows = [{"contact": "alex", "sender": "Sam", "direction": "sent", "timestamp": "2024-01-01T10:00:00", "text": "only mine"}]
+    body = client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())},
+                       data={"self_name": "Sam", "fmt": "json"}).json()
+    assert "only contains messages you sent" in body["note"]
+
+
+def test_import_detects_a_telegram_export(client):
+    payload = {"personal_information": {"user_id": 7, "first_name": "Sam"},
+               "chats": {"list": [{"name": "Alex", "type": "personal_chat", "messages": [
+                   {"type": "message", "date": "2024-01-02T21:15:00", "from": "Alex", "from_id": "user9", "text": "hey"},
+                   {"type": "message", "date": "2024-01-02T21:16:00", "from": "Sam", "from_id": "user7", "text": "hi"}]}]}}
+    body = client.post("/api/import", files={"file": ("result.json", json.dumps(payload).encode())},
+                       data={"self_name": "Sam"}).json()
+    assert body["format"] == "telegram" and body["parsed"] == 2 and body["note"] is None

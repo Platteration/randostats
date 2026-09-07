@@ -141,7 +141,7 @@
       <div class="card-head"><h2>Import messages</h2></div>
       <form id="import-form" class="import-form">
         <label>Your name in the export <input name="self_name" id="self-name" required placeholder="exactly as it appears"></label>
-        <label>Format <select name="fmt" id="fmt"><option value="auto">Auto-detect</option><option value="whatsapp">WhatsApp export (.txt)</option><option value="imessage">iMessage chat.db</option><option value="smsbackup">SMS Backup &amp; Restore (.xml)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+        <label>Format <select name="fmt" id="fmt"><option value="auto">Auto-detect</option><option value="whatsapp">WhatsApp export (.txt)</option><option value="imessage">iMessage chat.db</option><option value="smsbackup">SMS Backup &amp; Restore (.xml)</option><option value="telegram">Telegram export (.json or .zip)</option><option value="discord">Discord package (.zip)</option><option value="meta">Instagram or Messenger (.zip)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
         <label id="contact-label">Contact name (WhatsApp group exports only) <input name="contact" placeholder="optional"></label>
         <label>File <input type="file" name="file" id="file" required></label>
         <button class="primary" type="submit">Import</button>
@@ -155,6 +155,9 @@
           <li><b>WhatsApp</b>: open a chat → ⋮ → More → Export chat → Without media. One file per chat; import each one.</li>
           <li><b>iMessage (Mac)</b>: import <code>~/Library/Messages/chat.db</code> (grant Full Disk Access to your terminal or browser first). Everything comes in at once.</li>
           <li><b>Android SMS</b>: the "SMS Backup &amp; Restore" app writes an XML file; import it directly.</li>
+          <li><b>Telegram</b>: Desktop app → Settings → Advanced → Export Telegram data, JSON format. Import <code>result.json</code> or the whole zip.</li>
+          <li><b>Instagram or Messenger</b>: request your information, JSON format, then import the zip. Both live under <code>messages/inbox</code>.</li>
+          <li><b>Discord</b>: Settings → Data &amp; Privacy → Request all of my data, then import the zip. Discord only exports <em>your</em> messages, so nothing will show as received.</li>
           <li><b>Anything else</b>: a CSV or JSON with columns <code>contact, sender, direction, timestamp, text</code>.</li>
         </ul>
         <p>Everything stays on this machine in a local SQLite file. Nothing is uploaded anywhere, and re-importing the same file changes nothing.</p>

@@ -92,9 +92,9 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         if not data:
             raise HTTPException(400, "empty file")
         if fmt == "auto":
-            fmt = parsers.detect_format(file.filename or "", data[:4096]) or ""
+            fmt = parsers.detect_format(file.filename or "", data) or ""
             if not fmt:
-                raise HTTPException(400, "could not detect the export format; pick one explicitly")
+                raise HTTPException(400, "could not work out the export format; pick one from the list")
         try:
             if fmt == "whatsapp" and contact:
                 msgs = list(parsers.whatsapp.parse(data, self_name, contact=contact))
@@ -107,8 +107,15 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         added = store.add_messages(msgs)
         store.set_setting("self_name", self_name)
         bump()
+        directions = {m.direction for m in msgs}
+        note = None
+        if directions == {"sent"}:
+            note = ("This export only contains messages you sent, so anything about what you received will be empty. "
+                    "Discord exports are like this by design.")
+        elif directions == {"received"}:
+            note = "Nothing in this file was recognised as yours. Check that your name matches the export exactly."
         return {"format": fmt, "parsed": len(msgs), "added": added, "total": store.count(),
-                "contacts": sorted({m.contact for m in msgs})}
+                "contacts": sorted({m.contact for m in msgs}), "note": note}
 
     @app.delete("/api/messages")
     def clear():

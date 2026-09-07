@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         data = args.file.read_bytes()
         fmt = args.format
         if fmt == "auto":
-            fmt = parsers.detect_format(args.file.name, data[:4096]) or ""
+            fmt = parsers.detect_format(args.file.name, data) or ""
             if not fmt:
                 print("could not detect format; pass --format", file=sys.stderr)
                 return 2
