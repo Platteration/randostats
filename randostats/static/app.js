@@ -5,7 +5,16 @@
   const NS = "http://www.w3.org/2000/svg";
   const fmt = (n) => n.toLocaleString();
   const tip = $("#tooltip");
-  const state = { contacts: [], tables: new Set(), llm: false, session: null };
+  const state = { contacts: [], tables: new Set(), llm: false, session: null, hues: {} };
+
+  // A contact keeps the same hue everywhere, assigned once from overall volume so
+  // filtering a chart never repaints the survivors. Past eight people it's gray.
+  const assignHues = (rows) => {
+    state.hues = {};
+    rows.forEach((r, i) => { state.hues[r.contact] = i < 8 ? `var(--c${i + 1})` : "var(--muted)"; });
+  };
+  const hueOf = (name) => state.hues[name] || "var(--muted)";
+  const dot = (name) => `<i class="sw" style="background:${hueOf(name)}"></i>`;
 
   const api = async (path, opts) => {
     const r = await fetch(path, opts);
@@ -35,7 +44,7 @@
   // Horizontal stacked bars (two series) with a direct total label at the tip.
   function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150 }) {
     container.innerHTML = "";
-    if (!rows.length) { container.innerHTML = '<div class="empty">Nothing here yet. Import some messages.</div>'; return; }
+    if (!rows.length) { container.innerHTML = '<div class="empty">Nothing to plot. Import an export on the Import tab.</div>'; return; }
     const right = 70, rowH = 30, barH = 22, top = 8, maxChars = Math.floor(labelW / 7);
     const width = Math.max(600, container.clientWidth || 600), plotW = width - labelW - right;
     const max = niceMax(Math.max(...rows.map(r => series.reduce((a, s) => a + r[s], 0))));
@@ -59,7 +68,7 @@
         const last = j === series.length - 1 || series.slice(j + 1).every(t => r[t] === 0);
         const gap = j > 0 ? 2 : 0;
         const d = last ? roundedRight(x + gap, y, Math.max(0, w - gap), barH, 4) : `M${x + gap},${y} H${x + w} V${y + barH} H${x + gap} Z`;
-        g.appendChild(el("path", { d, class: `bar ${colors[j]}` }));
+        g.appendChild(el("path", { d, class: `bar gx ${colors[j]}`, style: `animation-delay:${i * 18}ms` }));
         x += w;
       });
       g.appendChild(el("text", { x: x + 6, y: y + barH / 2 + 4, class: "val" }, fmt(total)));
@@ -75,7 +84,7 @@
   // Vertical stacked columns (two series) on a categorical x axis.
   function columns(container, rows, { key, series, labels, colors = ["s1", "s2"], xLabel }) {
     container.innerHTML = "";
-    if (!rows.length || !rows.some(r => series.some(s => r[s] > 0))) { container.innerHTML = '<div class="empty">No data.</div>'; return; }
+    if (!rows.length || !rows.some(r => series.some(s => r[s] > 0))) { container.innerHTML = '<div class="empty">No messages in this slice.</div>'; return; }
     const width = Math.max(420, container.clientWidth || 420), height = 220, left = 44, bottom = 28, top = 10, right = 8;
     const plotW = width - left - right, plotH = height - top - bottom;
     const max = niceMax(Math.max(...rows.map(r => series.reduce((a, s) => a + r[s], 0))));
@@ -100,7 +109,7 @@
         const last = series.slice(j + 1).every(t => r[t] === 0);
         const gap = j > 0 ? 2 : 0;
         const d = last ? roundedTop(x0, y - h, barW, Math.max(0, h - gap), 4) : `M${x0},${y - h} H${x0 + barW} V${y - gap} H${x0} Z`;
-        g.appendChild(el("path", { d, class: `bar ${colors[j]}` }));
+        g.appendChild(el("path", { d, class: `bar gy ${colors[j]}`, style: `animation-delay:${i * 14}ms` }));
         y -= h;
       });
       if (i % every === 0) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
@@ -116,7 +125,7 @@
   // Single-series line with a wash and a crosshair tooltip.
   function line(container, rows, { key, value, label }) {
     container.innerHTML = "";
-    if (rows.length < 2) { container.innerHTML = '<div class="empty">Need at least two months of messages.</div>'; return; }
+    if (rows.length < 2) { container.innerHTML = '<div class="empty">One month of messages is a dot, not a line.</div>'; return; }
     const width = Math.max(600, container.clientWidth || 600), height = 220, left = 48, bottom = 28, top = 12, right = 16;
     const plotW = width - left - right, plotH = height - top - bottom;
     const max = niceMax(Math.max(...rows.map(r => r[value])));
@@ -158,7 +167,7 @@
   function heatmap(container, grid) {
     container.innerHTML = "";
     const max = Math.max(1, ...grid.flat());
-    if (max <= 1 && !grid.flat().some(v => v > 0)) { container.innerHTML = '<div class="empty">No data.</div>'; return; }
+    if (max <= 1 && !grid.flat().some(v => v > 0)) { container.innerHTML = '<div class="empty">No messages in this slice.</div>'; return; }
     const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const cell = 30, gap = 2, left = 40, top = 22, width = left + 24 * (cell + gap), height = top + 7 * (cell + gap);
     const steps = ["--seq-100", "--seq-200", "--seq-300", "--seq-400", "--seq-500", "--seq-600", "--seq-700"];
@@ -176,10 +185,44 @@
     container.appendChild(svg);
   }
 
-  function sparkline(values, w = 96, h = 20) {
+  // Two values per row (you vs them) joined by a connector. Never stack them:
+  // medians don't add up, so a stacked bar would state something untrue.
+  function dumbbell(container, rows, { key, a, b, labels, unit = "" }) {
+    container.innerHTML = "";
+    const usable = rows.filter(r => r[a] != null || r[b] != null);
+    if (!usable.length) { container.innerHTML = '<div class="empty">Not enough back-and-forth to time a reply.</div>'; return; }
+    const labelW = 150, right = 40, rowH = 30, top = 10, maxChars = Math.floor(labelW / 7);
+    const width = Math.max(600, container.clientWidth || 600), plotW = width - labelW - right;
+    const max = niceMax(Math.max(...usable.flatMap(r => [r[a] || 0, r[b] || 0])));
+    const X = (v) => labelW + plotW * v / max;
+    const svg = el("svg", { viewBox: `0 0 ${width} ${top + usable.length * rowH + 24}`, width, role: "img" });
+    const grid = el("g", { class: "grid" });
+    for (let i = 0; i <= 4; i++) {
+      const x = labelW + plotW * i / 4;
+      grid.appendChild(el("line", { x1: x, x2: x, y1: top, y2: top + usable.length * rowH }));
+      svg.appendChild(el("text", { x, y: top + usable.length * rowH + 16, "text-anchor": "middle", class: "tick" }, fmt(Math.round(max * i / 4)) + unit));
+    }
+    svg.appendChild(grid);
+    usable.forEach((r, i) => {
+      const y = top + i * rowH + rowH / 2;
+      const g = el("g", { class: "slot" });
+      g.appendChild(el("text", { x: labelW - 10, y: y + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+      if (r[a] != null && r[b] != null) g.appendChild(el("line", { x1: X(r[a]), x2: X(r[b]), y1: y, y2: y, stroke: "var(--axis)", "stroke-width": 2 }));
+      if (r[a] != null) g.appendChild(el("circle", { cx: X(r[a]), cy: y, r: 5, fill: "var(--s1)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+      if (r[b] != null) g.appendChild(el("circle", { cx: X(r[b]), cy: y, r: 5, fill: "var(--s2)", stroke: "var(--surface-1)", "stroke-width": 2 }));
+      const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
+      hover(hit, `<b>${r[key]}</b><br>${labels[0]}: ${r[a] == null ? "n/a" : fmt(r[a]) + unit}<br>${labels[1]}: ${r[b] == null ? "n/a" : fmt(r[b]) + unit}`);
+      g.appendChild(hit);
+      svg.appendChild(g);
+    });
+    container.appendChild(svg);
+    container._table = () => table([key, a, b], usable, ["Person", ...labels]);
+  }
+
+  function sparkline(values, stroke = "var(--s1)", w = 96, h = 20) {
     const max = Math.max(1, ...values);
     const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * (h - 2) - 1}`);
-    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${pts.join(" L")}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round"/></svg>`;
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${pts.join(" L")}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/></svg>`;
   }
 
   function table(cols, rows, labels) {
@@ -233,8 +276,46 @@
     chartOrTable("month-chart", (c) => line(c, t.by_month, { key: "month", value: "count", label: "Messages" }));
     const peaks = await api("/api/stats/timing/contacts?limit=15");
     $("#peaks").innerHTML = peaks.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Messages</th><th>Peak day</th><th>Peak hour</th><th>Hours 0–23</th></tr></thead><tbody>` +
-      peaks.map(p => `<tr><td>${p.contact}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour)}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
+      peaks.map(p => `<tr><td>${dot(p.contact)}${p.contact}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
   };
+
+  const mins = (v) => v == null ? "n/a" : v < 60 ? `${Math.round(v)} min` : v < 1440 ? `${(v / 60).toFixed(1)} h` : `${(v / 1440).toFixed(1)} d`;
+  const pct = (v) => v == null ? "n/a" : Math.round(v * 100) + "%";
+
+  render.open = render.close = render.reply = render.convo = async () => {
+    const gap = $("#convo-gap").value;
+    const { summary: sum, rows } = await api(`/api/stats/conversations?gap_hours=${gap}`);
+    $("#convo-kpis").innerHTML = rows.length ? [
+      kpi("Conversations", fmt(sum.conversations), `${mins(sum.you_reply_median)} median reply from you`),
+      kpi("You start", pct(sum.you_opened_share), "of conversations"),
+      kpi("You get the last word", pct(sum.you_closed_share), "which mostly means they stopped replying"),
+      kpi("They reply in", mins(sum.them_reply_median), "median, when they do"),
+      kpi("Your double texts", fmt(sum.double_texts), sum.ghosted_by ? `${sum.ghosted_by.contact} leaves you hanging most` : ""),
+    ].join("") : kpi("Conversations", "0", "import something first");
+    const top = rows.slice(0, 15);
+    chartOrTable("open-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_opened", "they_opened"], labels: ["You opened", "They opened"],
+      tipFn: (r) => `<b>${r.contact}</b><br>You opened: ${fmt(r.you_opened)} (${pct(r.you_opened_share)})<br>They opened: ${fmt(r.they_opened)}<br>${r.avg_conversation} messages per conversation` }));
+    chartOrTable("close-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_closed", "they_closed"], labels: ["You did", "They did"],
+      tipFn: (r) => `<b>${r.contact}</b><br>You had the last word: ${fmt(r.you_closed)} (${pct(r.you_closed_share)})<br>They did: ${fmt(r.they_closed)}` }));
+    chartOrTable("reply-chart", (c) => dumbbell(c, top, { key: "contact", a: "you_reply_median", b: "them_reply_median", labels: ["You answer them", "They answer you"], unit: " min" }));
+    $("#convo-table").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Conversations</th><th class="num">Your double texts</th><th class="num">Theirs</th><th class="num">Avg length</th><th class="num">Longest silence</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${dot(r.contact)}${r.contact}</td><td class="num">${fmt(r.conversations)}</td><td class="num">${fmt(r.your_double_texts)}</td><td class="num">${fmt(r.their_double_texts)}</td><td class="num">${r.avg_conversation}</td><td class="num">${r.longest_silence_days} d</td></tr>`).join("") + "</tbody></table>"
+      : '<div class="empty">Nothing to measure yet.</div>';
+    await renderMembers();
+  };
+
+  async function renderMembers() {
+    const groups = state.contacts.filter(c => c.is_group);
+    const card = $("#members-card"), sel = $("#members-contact");
+    card.hidden = !groups.length;
+    if (!groups.length) return;
+    if (sel.options.length !== groups.length) {
+      sel.innerHTML = groups.map(g => `<option value="${esc(g.contact)}">${esc(g.contact)} (${fmt(g.total)})</option>`).join("");
+    }
+    const rows = await api(`/api/stats/members?contact=${encodeURIComponent(sel.value || groups[0].contact)}`);
+    $("#members-table").innerHTML = `<table class="data"><thead><tr><th>Member</th><th class="num">Messages</th><th class="num">Share</th><th class="num">Avg words</th><th class="num">Peak hour</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${r.sender}${r.is_you ? " (you)" : ""}</td><td class="num">${fmt(r.count)}</td><td class="num">${pct(r.share)}</td><td class="num">${r.avg_words}</td><td class="num">${r.peak_hour}:00</td></tr>`).join("") + "</tbody></table>";
+  }
 
   render.spell = render.spelling = async () => {
     const dir = $("#spell-direction").value, contact = $("#spell-contact").value;
@@ -250,7 +331,7 @@
     const rows = dir === "sent" ? s.by_contact : s.by_sender, k = dir === "sent" ? "contact" : "sender";
     $("#spell-by-title").textContent = dir === "sent" ? "Who you misspell things to" : "Who misspells the most";
     $("#spell-by").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Misspellings</th><th>Favourites</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${r[k]}</td><td class="num">${fmt(r.misspelled)}</td><td>${r.top.join(", ")}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
+      rows.map(r => `<tr><td>${dot(r[k])}${r[k]}</td><td class="num">${fmt(r.misspelled)}</td><td>${r.top.join(", ")}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">Nothing misspelled. Suspicious.</div>';
   };
 
   render.words = async () => {
@@ -263,7 +344,7 @@
   const esc = (s) => String(s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
   function renderCounter(payload, { prepend = false } = {}) {
     const box = $("#counter-results");
-    if (!payload.results.length && !prepend) { box.innerHTML = '<div class="empty">No number in there. Try "70% of people…", "1 in 5…", "most people…", or "3 times more likely".</div>'; return; }
+    if (!payload.results.length && !prepend) { box.innerHTML = '<div class="empty">No number in there, so nothing to deflate. Try “70% of people…”, “1 in 5…”, “most people…”, or “3 times more likely”.</div>'; return; }
     const groups = {};
     for (const r of payload.results) (groups[r.claim.key] ||= []).push(r);
     const html = Object.entries(groups).map(([key, rs]) => {
@@ -288,6 +369,7 @@
       body: JSON.stringify({ text, session: live ? state.session : null, llm: $("#counter-llm").checked }) });
     if (live) { if (payload.results.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
   }
+  $("#members-contact").addEventListener("change", () => renderMembers());
   $("#counter-go").addEventListener("click", () => counter($("#counter-text").value));
   $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value); });
   $("#counter-random").addEventListener("click", async () => {
@@ -355,7 +437,7 @@
     (render[name] || (() => {}))();
   };
   $$(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
-  ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction"].forEach(id => $("#" + id).addEventListener("change", () => switchTab(location.hash.slice(1) || "people")));
+  ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction", "convo-gap"].forEach(id => $("#" + id).addEventListener("change", () => switchTab(location.hash.slice(1) || "people")));
 
   async function refresh() {
     const st = await api("/api/status");
@@ -363,6 +445,8 @@
     $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
     if (st.self_name) $("#self-name").value = st.self_name;
     const contacts = st.messages ? await api("/api/stats/contacts") : [];
+    state.contacts = contacts;
+    assignHues(contacts);
     for (const id of ["timing-contact", "spell-contact"]) {
       const sel = $("#" + id), cur = sel.value;
       sel.innerHTML = '<option value="">Everyone</option>' + contacts.map(c => `<option value="${esc(c.contact)}">${esc(c.contact)} (${fmt(c.total)})</option>`).join("");

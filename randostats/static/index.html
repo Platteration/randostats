@@ -11,6 +11,7 @@
   <div class="brand"><span class="logo">%</span> randostats</div>
   <nav class="tabs" role="tablist">
     <button data-tab="people" class="active">People</button>
+    <button data-tab="convo">Conversations</button>
     <button data-tab="timing">Timing</button>
     <button data-tab="spelling">Spelling</button>
     <button data-tab="words">Words</button>
@@ -33,6 +34,29 @@
     <div class="card"><div class="card-head"><h2>Who writes the longest messages</h2><span class="muted">average words per message they send you</span></div><div id="people-words" class="chart"></div></div>
   </section>
 
+  <section id="tab-convo" class="tab">
+    <div class="filters">
+      <label>A conversation breaks after
+        <select id="convo-gap"><option value="1">1 hour</option><option value="3">3 hours</option><option value="6" selected>6 hours</option><option value="12">12 hours</option><option value="24">a day</option></select>
+        of silence</label>
+    </div>
+    <div class="kpis" id="convo-kpis"></div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Who opens conversations</h2><button class="ghost" data-toggle-table="open-chart">Table</button></div>
+        <div class="legend"><span><i class="sw s1"></i>You opened</span><span><i class="sw s2"></i>They opened</span></div>
+        <div id="open-chart" class="chart"></div></div>
+      <div class="card"><div class="card-head"><h2>Who gets the last word</h2><button class="ghost" data-toggle-table="close-chart">Table</button></div>
+        <div class="legend"><span><i class="sw s1"></i>You did</span><span><i class="sw s2"></i>They did</span></div>
+        <div id="close-chart" class="chart"></div></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>Reply time</h2><span class="muted">median minutes to answer the other person</span><button class="ghost" data-toggle-table="reply-chart">Table</button></div>
+      <div class="legend"><span><i class="sw s1"></i>You answer them</span><span><i class="sw s2"></i>They answer you</span></div>
+      <div id="reply-chart" class="chart"></div></div>
+    <div class="card"><div class="card-head"><h2>Double texts and silences</h2><span class="muted">a double text is two or more messages in a row with no reply</span></div><div id="convo-table"></div></div>
+    <div class="card" id="members-card" hidden><div class="card-head"><h2>Inside a group</h2>
+      <label>Group <select id="members-contact"></select></label></div><div id="members-table"></div></div>
+  </section>
+
   <section id="tab-timing" class="tab">
     <div class="filters"><label>Person <select id="timing-contact"><option value="">Everyone</option></select></label><span id="timing-summary" class="muted"></span></div>
     <div class="grid2">
@@ -45,7 +69,7 @@
     </div>
     <div class="card"><div class="card-head"><h2>When conversations happen</h2><span class="muted">weekday × hour, darker is busier</span></div><div id="heatmap" class="chart"></div></div>
     <div class="card"><div class="card-head"><h2>Volume over time</h2><button class="ghost" data-toggle-table="month-chart">Table</button></div><div id="month-chart" class="chart"></div></div>
-    <div class="card"><div class="card-head"><h2>Each person's favourite time to talk</h2></div><div id="peaks"></div></div>
+    <div class="card"><div class="card-head"><h2>Each person's favourite time to talk</h2><span class="muted">when they message you, hour by hour</span></div><div id="peaks"></div></div>
   </section>
 
   <section id="tab-spelling" class="tab">
@@ -67,9 +91,9 @@
 
   <section id="tab-counter" class="tab">
     <div class="card">
-      <div class="card-head"><h2>Counterpoint</h2><span class="muted">Say a statistic. Get one just as true and just as irrelevant.</span></div>
+      <div class="card-head"><h2>Counterpoint</h2><span class="muted">Say a statistic. Get one just as true, just as sourced, and completely unrelated.</span></div>
       <div class="counter-input">
-        <textarea id="counter-text" rows="3" placeholder="e.g. seventy percent of people drink beer, so it's obviously fine"></textarea>
+        <textarea id="counter-text" rows="3" placeholder="e.g. seventy percent of people drink beer, so it&#39;s obviously fine"></textarea>
         <div class="row">
           <button id="counter-go" class="primary">Counter it</button>
           <button id="counter-listen" class="ghost">🎙 Listen</button>
@@ -104,7 +128,7 @@
           <li><b>Android SMS</b>: the "SMS Backup &amp; Restore" app writes an XML file; import it directly.</li>
           <li><b>Anything else</b>: a CSV or JSON with columns <code>contact, sender, direction, timestamp, text</code>.</li>
         </ul>
-        <p>Everything stays on this machine in a local SQLite file. Nothing is uploaded anywhere.</p>
+        <p>Everything stays on this machine in a local SQLite file. Nothing is uploaded anywhere, and re-importing the same file changes nothing.</p>
       </details>
     </div>
   </section>

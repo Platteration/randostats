@@ -59,3 +59,18 @@ def test_counterpoint_endpoints(client):
 
 def test_index_served(client):
     assert "randostats" in client.get("/").text
+
+
+def test_conversation_and_member_endpoints(client):
+    rows = [{"contact": "Alex", "sender": "Alex", "direction": "received", "timestamp": "2024-01-01T10:00:00", "text": "hi"},
+            {"contact": "Alex", "sender": "Sam", "direction": "sent", "timestamp": "2024-01-01T10:05:00", "text": "hey"},
+            {"contact": "Alex", "sender": "Sam", "direction": "sent", "timestamp": "2024-01-03T10:00:00", "text": "still there?"}]
+    client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())}, data={"self_name": "Sam", "fmt": "json"})
+    body = client.get("/api/stats/conversations?gap_hours=6").json()
+    assert body["summary"]["conversations"] == 2
+    assert body["rows"][0]["contact"] == "Alex"
+    # a display limit must not change the headline numbers
+    limited = client.get("/api/stats/conversations?gap_hours=6&limit=1").json()
+    assert limited["summary"] == body["summary"] and len(limited["rows"]) == 1
+    members = client.get("/api/stats/members?contact=Alex").json()
+    assert {m["sender"] for m in members} == {"Alex", "Sam"}

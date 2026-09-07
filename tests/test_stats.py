@@ -58,3 +58,39 @@ def test_word_frequency(messages):
     top = stats.word_frequency(messages, limit=5)
     assert top[0]["word"] in {"invite", "cars", "recieved", "tommorow"} or top
     assert all(w["word"] not in stats.STOPWORDS for w in top)
+
+
+def test_conversation_health_splits_on_silence(messages):
+    rows = stats.conversation_health(messages, gap_hours=6)
+    alex = next(r for r in rows if r["contact"] == "Alex")
+    priya = next(r for r in rows if r["contact"] == "Priya")
+    assert alex["conversations"] == 1 and priya["conversations"] == 1
+    assert alex["they_opened"] == 1 and alex["you_opened"] == 0
+    assert alex["they_closed"] == 1  # Alex sent the last message in that thread
+    assert priya["you_opened"] == 1
+    summary = stats.conversation_summary(rows)
+    assert summary["conversations"] == 2
+    assert 0 <= summary["you_opened_share"] <= 1
+
+
+def test_double_texts_and_silence():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "hi"), msg("Alex", "sent", t + timedelta(minutes=2), "you there"),
+            msg("Alex", "received", t + timedelta(minutes=30), "sorry"),
+            msg("Alex", "sent", t + timedelta(days=9), "long time")]
+    (row,) = stats.conversation_health(msgs, gap_hours=6)
+    assert row["your_double_texts"] == 1 and row["their_double_texts"] == 0
+    assert row["conversations"] == 2
+    assert row["longest_silence_days"] == 9.0
+
+
+def test_group_members():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Trip", "received", t, "hi all", sender="Alex"),
+            msg("Trip", "received", t + timedelta(minutes=1), "hello", sender="Priya"),
+            msg("Trip", "received", t + timedelta(minutes=2), "yo", sender="Alex"),
+            msg("Trip", "sent", t + timedelta(minutes=3), "hey", sender="Me")]
+    rows = stats.group_members(msgs, "Trip")
+    assert [r["sender"] for r in rows] == ["Alex", "Priya", "Me"]
+    assert rows[0]["count"] == 2 and rows[0]["share"] == 0.5 and rows[0]["is_you"] is False
+    assert rows[2]["is_you"] is True

@@ -121,6 +121,16 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     def timing_contacts(limit: int = 20):
         return stats.contact_peaks(messages(), limit=limit)
 
+    @app.get("/api/stats/conversations")
+    def conversations(gap_hours: float = 6.0, limit: int | None = None):
+        rows = stats.conversation_health(messages(), gap_hours=gap_hours)
+        # The summary always covers everyone; `limit` only trims what is charted.
+        return {"gap_hours": gap_hours, "summary": stats.conversation_summary(rows), "rows": rows[:limit] if limit else rows}
+
+    @app.get("/api/stats/members")
+    def members(contact: str):
+        return stats.group_members(messages(), contact)
+
     @app.get("/api/stats/misspellings")
     def misspellings(direction: str = "sent", limit: int = 50, contact: str | None = None):
         if direction not in ("sent", "received"):

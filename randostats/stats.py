@@ -305,3 +305,121 @@ def misspellings(messages: list[Message], speller: Speller | None = None, direct
             ({"sender": s, "misspelled": sum(v.values()), "top": [w for w, _ in v.most_common(5)]} for s, v in by_sender.items()),
             key=lambda r: r["misspelled"], reverse=True)[:limit],
     }
+
+
+# ---------------------------------------------------------------------------
+# Conversation shape: who opens, who has the last word, who double-texts
+# ---------------------------------------------------------------------------
+
+def split_conversations(messages: list[Message], gap_hours: float = 6.0) -> list[list[Message]]:
+    """Split one contact's messages into runs separated by more than ``gap_hours`` of silence."""
+    gap = timedelta(hours=gap_hours)
+    convs: list[list[Message]] = []
+    current: list[Message] = []
+    for m in sorted(messages, key=lambda m: m.timestamp):
+        if current and m.timestamp - current[-1].timestamp > gap:
+            convs.append(current)
+            current = []
+        current.append(m)
+    if current:
+        convs.append(current)
+    return convs
+
+
+def _runs(conv: list[Message]) -> list[tuple[str, int]]:
+    """Consecutive same-direction stretches inside a conversation."""
+    out: list[tuple[str, int]] = []
+    for m in conv:
+        if out and out[-1][0] == m.direction:
+            out[-1] = (m.direction, out[-1][1] + 1)
+        else:
+            out.append((m.direction, 1))
+    return out
+
+
+def conversation_health(messages: list[Message], gap_hours: float = 6.0, limit: int | None = None) -> list[dict]:
+    """Per contact: conversation count, who opens, who gets the last word, double-texts, silences."""
+    by_contact: dict[str, list[Message]] = defaultdict(list)
+    for m in messages:
+        by_contact[m.contact].append(m)
+
+    rows = []
+    for contact, msgs in by_contact.items():
+        convs = split_conversations(msgs, gap_hours)
+        opened = Counter(c[0].direction for c in convs)
+        closed = Counter(c[-1].direction for c in convs)
+        doubles = Counter()
+        for conv in convs:
+            for direction, length in _runs(conv):
+                if length >= 2:
+                    doubles[direction] += 1
+        ordered = sorted(msgs, key=lambda m: m.timestamp)
+        silence = max((b.timestamp - a.timestamp for a, b in zip(ordered, ordered[1:])), default=timedelta(0))
+        latency = reply_latency(msgs) or {}
+        total = len(convs)
+        rows.append({
+            "contact": contact,
+            "messages": len(msgs),
+            "conversations": total,
+            "you_opened": opened["sent"],
+            "they_opened": opened["received"],
+            "you_opened_share": round(opened["sent"] / total, 3) if total else 0,
+            "you_closed": closed["sent"],
+            "they_closed": closed["received"],
+            "you_closed_share": round(closed["sent"] / total, 3) if total else 0,
+            "your_double_texts": doubles["sent"],
+            "their_double_texts": doubles["received"],
+            "avg_conversation": round(len(msgs) / total, 1) if total else 0,
+            "longest_silence_days": round(silence.total_seconds() / 86400, 1),
+            "you_reply_median": latency.get("you_median_minutes"),
+            "them_reply_median": latency.get("them_median_minutes"),
+        })
+    rows.sort(key=lambda r: r["conversations"], reverse=True)
+    return rows[:limit] if limit else rows
+
+
+def conversation_summary(rows: list[dict]) -> dict:
+    """Totals across every contact, for the tiles above the tables."""
+    if not rows:
+        return {"conversations": 0, "you_opened_share": None, "you_closed_share": None,
+                "you_reply_median": None, "them_reply_median": None, "double_texts": 0, "ghosted_by": None}
+    total = sum(r["conversations"] for r in rows) or 1
+    you_replies = [r["you_reply_median"] for r in rows if r["you_reply_median"] is not None]
+    them_replies = [r["them_reply_median"] for r in rows if r["them_reply_median"] is not None]
+    # The person most likely to leave your message unanswered at the end of a conversation.
+    ghost = max(rows, key=lambda r: (r["you_closed_share"], r["conversations"]))
+    return {
+        "conversations": sum(r["conversations"] for r in rows),
+        "you_opened_share": round(sum(r["you_opened"] for r in rows) / total, 3),
+        "you_closed_share": round(sum(r["you_closed"] for r in rows) / total, 3),
+        "you_reply_median": round(median(you_replies), 1) if you_replies else None,
+        "them_reply_median": round(median(them_replies), 1) if them_replies else None,
+        "double_texts": sum(r["your_double_texts"] for r in rows),
+        "ghosted_by": {"contact": ghost["contact"], "share": ghost["you_closed_share"]} if ghost["conversations"] else None,
+    }
+
+
+def group_members(messages: list[Message], contact: str) -> list[dict]:
+    """Per-person breakdown inside one conversation, which is what makes a group chat readable."""
+    msgs = [m for m in messages if m.contact == contact]
+    if not msgs:
+        return []
+    by_sender: dict[str, list[Message]] = defaultdict(list)
+    for m in msgs:
+        by_sender[m.sender].append(m)
+    rows = []
+    for sender, items in by_sender.items():
+        hours = Counter(m.timestamp.hour for m in items)
+        words = sum(len(words_of(m.text)) for m in items)
+        rows.append({
+            "sender": sender,
+            "count": len(items),
+            "share": round(len(items) / len(msgs), 3),
+            "avg_words": round(words / len(items), 1),
+            "peak_hour": hours.most_common(1)[0][0],
+            "first": min(m.timestamp for m in items).isoformat(),
+            "last": max(m.timestamp for m in items).isoformat(),
+            "is_you": items[0].direction == "sent",
+        })
+    rows.sort(key=lambda r: r["count"], reverse=True)
+    return rows
