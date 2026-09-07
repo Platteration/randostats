@@ -7,9 +7,10 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+<a href="#main" class="skip">Skip to content</a>
 <header class="top">
   <div class="brand"><span class="logo">%</span> randostats</div>
-  <nav class="tabs" role="tablist">
+  <nav class="tabs" role="tablist" aria-label="Views">
     <button data-tab="people" class="active">People</button>
     <button data-tab="convo">Conversations</button>
     <button data-tab="timing">Timing</button>
@@ -22,8 +23,9 @@
   <div class="status" id="status">loading…</div>
 </header>
 
-<main>
-  <section id="tab-people" class="tab active">
+<div id="live" class="sr-only" role="status" aria-live="polite"></div>
+<main id="main" tabindex="-1">
+  <section role="tabpanel" id="tab-people" class="tab active">
     <div class="kpis" id="kpis"></div>
     <div class="card">
       <div class="card-head"><h2>Messages per person</h2>
@@ -35,7 +37,7 @@
     <div class="card"><div class="card-head"><h2>Who writes the longest messages</h2><span class="muted">average words per message they send you</span></div><div id="people-words" class="chart"></div></div>
   </section>
 
-  <section id="tab-convo" class="tab">
+  <section role="tabpanel" id="tab-convo" class="tab">
     <div class="filters">
       <label>A conversation breaks after
         <select id="convo-gap"><option value="1">1 hour</option><option value="3">3 hours</option><option value="6" selected>6 hours</option><option value="12">12 hours</option><option value="24">a day</option></select>
@@ -58,7 +60,7 @@
       <label>Group <select id="members-contact"></select></label></div><div id="members-table"></div></div>
   </section>
 
-  <section id="tab-timing" class="tab">
+  <section role="tabpanel" id="tab-timing" class="tab">
     <div class="filters"><label>Person <select id="timing-contact"><option value="">Everyone</option></select></label><span id="timing-summary" class="muted"></span></div>
     <div class="grid2">
       <div class="card"><div class="card-head"><h2>Hour of day</h2><button class="ghost" data-toggle-table="hour-chart">Table</button></div>
@@ -73,7 +75,7 @@
     <div class="card"><div class="card-head"><h2>Each person's favourite time to talk</h2><span class="muted">when they message you, hour by hour</span></div><div id="peaks"></div></div>
   </section>
 
-  <section id="tab-spelling" class="tab">
+  <section role="tabpanel" id="tab-spelling" class="tab">
     <div class="filters">
       <label>Whose typos <select id="spell-direction"><option value="sent">Yours</option><option value="received">Everyone else's</option></select></label>
       <label>Person <select id="spell-contact"><option value="">Everyone</option></select></label>
@@ -85,9 +87,9 @@
     </div>
   </section>
 
-  <section id="tab-words" class="tab">
+  <section role="tabpanel" id="tab-words" class="tab">
     <div class="filters"><label>Direction <select id="words-direction"><option value="">Both</option><option value="sent">Sent by you</option><option value="received">Received</option></select></label></div>
-    <div class="card"><div class="card-head"><h2>Most used words</h2><span class="muted">click any bar to read the messages</span><button class="ghost" data-toggle-table="words-chart">Table</button></div><div id="words-chart" class="chart"></div></div>
+    <div class="card"><div class="card-head"><h2>Most used words</h2><span class="muted">open any bar to read the messages behind it</span><button class="ghost" data-toggle-table="words-chart">Table</button></div><div id="words-chart" class="chart"></div></div>
     <div class="kpis" id="emoji-kpis"></div>
     <div class="grid2">
       <div class="card"><div class="card-head"><h2>Emoji</h2><button class="ghost" data-toggle-table="emoji-chart">Table</button></div>
@@ -105,7 +107,7 @@
     </div>
   </section>
 
-  <section id="tab-wrapped" class="tab">
+  <section role="tabpanel" id="tab-wrapped" class="tab">
     <div class="filters">
       <label>Year <select id="wrapped-year"></select></label>
       <button class="primary" id="wrapped-png">Download PNG</button>
@@ -114,7 +116,7 @@
     <div class="card wrapped-holder"><div id="wrapped-card"></div></div>
   </section>
 
-  <section id="tab-counter" class="tab">
+  <section role="tabpanel" id="tab-counter" class="tab">
     <div class="card">
       <div class="card-head"><h2>Counterpoint</h2><span class="muted">Say a statistic. Get one just as true, just as sourced, and completely unrelated.</span></div>
       <div class="packs">
@@ -136,7 +138,7 @@
     <div id="counter-results" class="results"></div>
   </section>
 
-  <section id="tab-import" class="tab">
+  <section role="tabpanel" id="tab-import" class="tab">
     <div class="card">
       <div class="card-head"><h2>Import messages</h2></div>
       <form id="import-form" class="import-form">
@@ -166,7 +168,7 @@
   </section>
 </main>
 <div id="scrim" class="scrim" hidden></div>
-<aside id="drawer" class="drawer" hidden aria-label="Messages behind this number">
+<aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawer-title">
   <div class="drawer-head">
     <div><div id="drawer-title" class="dtitle"></div><div id="drawer-sub" class="muted"></div></div>
     <button class="ghost" id="drawer-close" aria-label="Close">✕</button>

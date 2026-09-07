@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -43,31 +44,39 @@ class Store:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(_SCHEMA)
+        # The API serves requests from a thread pool and shares one connection.
+        # sqlite3.threadsafety is 3 on most builds, which makes that safe, but
+        # it depends on how SQLite was compiled, so serialise here regardless.
+        self.lock = threading.Lock()
+        with self.lock:
+            self.conn.executescript(_SCHEMA)
 
     # -- settings ---------------------------------------------------------
     def get_setting(self, key: str, default: str | None = None) -> str | None:
-        row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        with self.lock:
+            row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else default
 
     def set_setting(self, key: str, value: str) -> None:
-        with self.conn:
+        with self.lock, self.conn:
             self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
     # -- messages ---------------------------------------------------------
     def add_messages(self, messages: Iterable[Message]) -> int:
         """Insert messages, returning how many were new."""
         rows = [(m.contact, m.sender, m.direction, m.timestamp.isoformat(sep=" "), m.text, m.source) for m in messages]
-        before = self.count()
-        with self.conn:
+        with self.lock, self.conn:
+            before = self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
             self.conn.executemany(
                 "INSERT OR IGNORE INTO messages (contact, sender, direction, ts, text, source) VALUES (?, ?, ?, ?, ?, ?)",
                 rows,
             )
-        return self.count() - before
+            after = self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        return after - before
 
     def count(self) -> int:
-        return self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
 
     def all_messages(self, contact: str | None = None) -> list[Message]:
         sql = "SELECT contact, sender, direction, ts, text, source FROM messages"
@@ -76,17 +85,20 @@ class Store:
             sql += " WHERE contact = ?"
             params = (contact,)
         sql += " ORDER BY ts"
+        with self.lock:
+            rows = self.conn.execute(sql, params).fetchall()
         return [
             Message(contact=r["contact"], sender=r["sender"], direction=r["direction"],
                     timestamp=datetime.fromisoformat(r["ts"]), text=r["text"], source=r["source"])
-            for r in self.conn.execute(sql, params)
+            for r in rows
         ]
 
     def contacts(self) -> list[str]:
-        return [r[0] for r in self.conn.execute("SELECT DISTINCT contact FROM messages ORDER BY contact")]
+        with self.lock:
+            return [r[0] for r in self.conn.execute("SELECT DISTINCT contact FROM messages ORDER BY contact")]
 
     def clear(self) -> None:
-        with self.conn:
+        with self.lock, self.conn:
             self.conn.execute("DELETE FROM messages")
 
     def close(self) -> None:

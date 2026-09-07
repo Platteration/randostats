@@ -86,6 +86,19 @@ statistics, so every number shown still traces to a listed source. Requests use
 `claude-opus-5` with refusal fallbacks enabled; set `RANDOSTATS_MODEL` to change
 the model.
 
+## Accessibility
+
+Every chart is one tab stop. Arrow keys walk its marks, Home and End jump to
+either end, and Enter opens the messages behind the focused mark. The focused
+mark is outlined and its values are announced in a live region, so the chart
+reads the same by keyboard as by mouse. Escape closes the drill-down and
+returns focus where it started.
+
+Each chart also has a table view, colour is never the only channel (a legend
+is always present for two or more series), animation respects
+`prefers-reduced-motion`, and the palette is validated for contrast and
+colour-vision deficiency in both light and dark themes.
+
 ## Performance
 
 Measured on a generated archive of 250,000 messages across 40 people and nine

@@ -119,3 +119,37 @@ def test_import_reports_an_oversized_archive_as_413(client, monkeypatch):
             {"sender_name": "Alex", "timestamp_ms": 1704229200000, "content": "hi"}]})})
     r = client.post("/api/import", files={"file": ("x.zip", data)}, data={"self_name": "Sam", "fmt": "meta"})
     assert r.status_code == 413
+
+
+def test_store_survives_concurrent_use():
+    """The API serves from a thread pool and shares one connection."""
+    import tempfile
+    import threading
+    from datetime import datetime, timedelta
+
+    from randostats.models import Message
+    from randostats.store import Store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "concurrent.db")
+        base = datetime(2024, 1, 1)
+        errors: list[Exception] = []
+
+        def writer(worker: int):
+            try:
+                for i in range(40):
+                    store.add_messages([Message(contact=f"C{worker}", sender="Sam", direction="sent",
+                                                timestamp=base + timedelta(minutes=i), text=f"m{i}")])
+                    store.all_messages()
+                    store.count()
+            except Exception as exc:  # noqa: BLE001 - the point is to catch anything
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(w,)) for w in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        assert store.count() == 8 * 40
+        store.close()

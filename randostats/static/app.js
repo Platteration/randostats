@@ -32,17 +32,68 @@
   const showTip = (evt, html) => { tip.innerHTML = html; tip.hidden = false; moveTip(evt); };
   const moveTip = (evt) => { tip.style.left = (evt.clientX + 14) + "px"; tip.style.top = (evt.clientY + 14) + "px"; };
   const hideTip = () => { tip.hidden = true; };
+  // Every mark records what it says and what it does, so a keyboard can reach
+  // the same information a mouse can. Charts stay usable without a pointer.
+  const markMeta = new WeakMap();
+  const meta = (node, patch) => markMeta.set(node, { ...(markMeta.get(node) || {}), ...patch });
+  const plain = (html) => String(html).replace(/<br\s*\/?>/g, ". ").replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+
   const hover = (node, html) => {
+    meta(node, { html });
     node.addEventListener("mouseenter", (e) => showTip(e, html));
     node.addEventListener("mousemove", moveTip);
     node.addEventListener("mouseleave", hideTip);
   };
+
+  const say = (text) => { const live = $("#live"); if (live) live.textContent = text; };
+
+  const tipAt = (node, html) => {
+    const box = node.getBoundingClientRect();
+    showTip({ clientX: box.left + box.width / 2, clientY: box.top + Math.min(box.height / 2, 40) }, html);
+  };
+
+  // One tab stop per chart; arrow keys walk the marks, Enter opens the drill-down.
+  function keyboardNav(container, label) {
+    const svg = container.querySelector("svg");
+    if (!svg) return;
+    const marks = [...svg.querySelectorAll(".hit, rect.clickable")].filter(n => markMeta.has(n));
+    if (!marks.length) return;
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("role", "application");
+    svg.setAttribute("aria-label", `${label}. ${marks.length} marks. Arrow keys to explore, Enter to open the messages behind one.`);
+    let i = -1;
+    const go = (next) => {
+      i = (next + marks.length) % marks.length;
+      const node = marks[i], info = markMeta.get(node) || {};
+      marks.forEach(m => m.classList.remove("kb"));
+      node.classList.add("kb");
+      tipAt(node, info.html || "");
+      say(plain(info.html || ""));
+    };
+    svg.addEventListener("keydown", (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (step) { e.preventDefault(); go(i < 0 ? (step > 0 ? 0 : marks.length - 1) : i + step); }
+      else if (e.key === "Home") { e.preventDefault(); go(0); }
+      else if (e.key === "End") { e.preventDefault(); go(marks.length - 1); }
+      else if ((e.key === "Enter" || e.key === " ") && i >= 0) {
+        const activate = (markMeta.get(marks[i]) || {}).activate;
+        if (activate) { e.preventDefault(); activate(); }
+      }
+    });
+    svg.addEventListener("blur", () => { hideTip(); marks.forEach(m => m.classList.remove("kb")); i = -1; });
+  }
   const niceMax = (v) => { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p; const n = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(c => m <= c); return n * p; };
   const roundedTop = (x, y, w, h, r) => { r = Math.min(r, w / 2, h); return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`; };
   const roundedRight = (x, y, w, h, r) => { r = Math.min(r, h / 2, w); return `M${x},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x} Z`; };
 
   // Horizontal stacked bars (two series) with a direct total label at the tip.
-  const clickable = (node, fn, row) => { if (!fn) return; node.classList.add("clickable"); node.addEventListener("click", () => fn(row)); };
+  const clickable = (node, fn, row) => {
+    if (!fn) return;
+    node.classList.add("clickable");
+    meta(node, { activate: () => fn(row) });
+    node.addEventListener("click", () => fn(row));
+  };
 
   function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150, labelSize, onClick }) {
     container.innerHTML = "";
@@ -82,6 +133,7 @@
       svg.appendChild(g);
     });
     container.appendChild(svg);
+    keyboardNav(container, `${labels.join(" and ")} by ${keyLabel || key}`);
     container._table = () => table(series.length > 1 ? [key, ...series, "total"] : [key, ...series], rows.map(r => ({ ...r, total: series.reduce((a, s) => a + r[s], 0) })), [keyLabel || key, ...labels, "Total"]);
   }
 
@@ -124,6 +176,7 @@
       svg.appendChild(g);
     });
     container.appendChild(svg);
+    keyboardNav(container, `${labels.join(" and ")} by ${key}`);
     container._table = () => table([key, ...series], rows, [key[0].toUpperCase() + key.slice(1), ...labels]);
   }
 
@@ -172,6 +225,27 @@
       });
     }
     svg.appendChild(hit);
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("role", "application");
+    svg.setAttribute("aria-label", `${label} over time, ${rows.length} points. Arrow keys to walk them, Enter to open one.`);
+    let ki = -1;
+    const kmove = (next) => {
+      ki = Math.max(0, Math.min(lastI, next));
+      cross.setAttribute("x1", X(ki)); cross.setAttribute("x2", X(ki));
+      dot.setAttribute("cx", X(ki)); dot.setAttribute("cy", Y(rows[ki][value]));
+      const box = svg.getBoundingClientRect();
+      showTip({ clientX: box.left + (X(ki) / width) * box.width, clientY: box.top + box.height / 2 },
+              `<b>${esc(rows[ki][key])}</b><br>${label}: ${fmt(rows[ki][value])}`);
+      say(`${rows[ki][key]}, ${fmt(rows[ki][value])} ${label.toLowerCase()}`);
+    };
+    svg.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); kmove(ki < 0 ? 0 : ki + 1); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); kmove(ki < 0 ? lastI : ki - 1); }
+      else if (e.key === "Home") { e.preventDefault(); kmove(0); }
+      else if (e.key === "End") { e.preventDefault(); kmove(lastI); }
+      else if ((e.key === "Enter" || e.key === " ") && ki >= 0 && onClick) { e.preventDefault(); onClick(rows[ki]); }
+    });
+    svg.addEventListener("blur", () => { hideTip(); cross.setAttribute("x1", -10); cross.setAttribute("x2", -10); dot.setAttribute("cx", -10); ki = -1; });
     container.appendChild(svg);
     container._table = () => table([key, value], rows, ["Month", label]);
   }
@@ -197,6 +271,7 @@
       });
     });
     container.appendChild(svg);
+    keyboardNav(container, "Messages by weekday and hour");
   }
 
   // Two values per row (you vs them) joined by a connector. Never stack them:
@@ -230,6 +305,7 @@
       svg.appendChild(g);
     });
     container.appendChild(svg);
+    keyboardNav(container, `${labels.join(" against ")} by ${key}`);
     container._table = () => table([key, a, b], usable, ["Person", ...labels]);
   }
 
@@ -286,6 +362,7 @@
       });
     }
     container.appendChild(svg);
+    keyboardNav(container, `Net tone by ${key}`);
     container._table = () => table([key, "positive", "negative", value], usable, [key[0].toUpperCase() + key.slice(1), "Warm words", "Cold words", "Net tone"]);
   }
 
@@ -338,15 +415,36 @@
     $("#drawer-more").hidden = drawerState.offset + data.messages.length >= data.total;
   }
 
+  let returnFocusTo = null;
+
   async function openDrawer(title, params) {
     drawerState.title = title; drawerState.params = params; drawerState.offset = 0;
+    returnFocusTo = document.activeElement;
     $("#drawer-title").textContent = title;
     $("#drawer-q").value = "";
     $("#drawer").hidden = false; $("#scrim").hidden = false;
     await loadDrawer();
     $("#drawer-q").focus();
+    say(`${title}. ${$("#drawer-sub").textContent}`);
   }
-  const closeDrawer = () => { $("#drawer").hidden = true; $("#scrim").hidden = true; };
+
+  const closeDrawer = () => {
+    if ($("#drawer").hidden) return;
+    $("#drawer").hidden = true; $("#scrim").hidden = true;
+    if (returnFocusTo && document.contains(returnFocusTo)) returnFocusTo.focus();
+    returnFocusTo = null;
+  };
+
+  // Tab must not wander behind the dialog while it is open.
+  $("#drawer").addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const focusable = [...$("#drawer").querySelectorAll('button:not([hidden]), input, [href], [tabindex]:not([tabindex="-1"])')]
+      .filter(el => el.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   $("#drawer-close").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
@@ -369,7 +467,7 @@
     const shown = lim ? rows.slice(0, lim) : rows;
     chartOrTable("people-chart", (c) => hbars(c, shown, {
       key: "contact", keyLabel: "Person", series: ["sent", "received"], labels: ["Sent by you", "Received"],
-      tipFn: (r) => `<b>${esc(r.contact)}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>click to read them</i>`,
+      tipFn: (r) => `<b>${esc(r.contact)}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>open to read them</i>`,
       onClick: (r) => openDrawer(r.contact, { contact: r.contact }),
     }));
     const wordy = [...shown].sort((a, b) => b.avg_words_received - a.avg_words_received).slice(0, 12);
@@ -716,12 +814,28 @@
 
   // ---------- tabs & refresh ----------
   const switchTab = (name) => {
-    $$(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+    $$(".tabs button").forEach(b => {
+      const on = b.dataset.tab === name;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", String(on));
+    });
     $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
     location.hash = name;
     (render[name] || (() => {}))();
   };
-  $$(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  $$(".tabs button").forEach((b, idx, all) => {
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-controls", "tab-" + b.dataset.tab);
+    b.addEventListener("click", () => switchTab(b.dataset.tab));
+    b.addEventListener("keydown", (e) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const next = all[(idx + step + all.length) % all.length];
+      next.focus();
+      switchTab(next.dataset.tab);
+    });
+  });
   // Back, forward, and a pasted #hash link should all land on the right tab.
   window.addEventListener("hashchange", () => {
     const tab = location.hash.slice(1);

@@ -30,6 +30,12 @@
   --good: #0ca30c;
 }
 * { box-sizing: border-box; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.skip { position: absolute; left: -9999px; top: 8px; z-index: 30; background: var(--ink); color: var(--surface-1); padding: 8px 14px; border-radius: 8px; }
+.skip:focus { left: 8px; }
+:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
+.chart svg:focus-visible { outline: 2px solid var(--s1); outline-offset: 3px; }
+.chart .hit.kb, .chart rect.kb { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 4 3; fill: rgba(42,120,214,.10); }
 [hidden] { display: none !important; }
 body { margin: 0; font: 14px/1.5 var(--font); color: var(--ink); background: var(--page); }
 .top { display: flex; align-items: center; gap: 24px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface-1); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
