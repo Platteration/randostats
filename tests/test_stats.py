@@ -94,3 +94,22 @@ def test_group_members():
     assert [r["sender"] for r in rows] == ["Alex", "Priya", "Me"]
     assert rows[0]["count"] == 2 and rows[0]["share"] == 0.5 and rows[0]["is_you"] is False
     assert rows[2]["is_you"] is True
+
+
+def test_search_filters(messages):
+    assert stats.search(messages, contact="Alex")["total"] == 3
+    assert stats.search(messages, direction="sent")["total"] == 3
+    assert stats.search(messages, hour=9)["total"] == 3
+    assert stats.search(messages, q="RECIEVED")["total"] == 1  # case-insensitive substring
+    assert stats.search(messages, month="2024-01")["total"] == 6
+    page = stats.search(messages, limit=2)
+    assert page["total"] == 6 and len(page["messages"]) == 2
+    # newest first, so paging is stable
+    assert page["messages"][0]["timestamp"] > page["messages"][1]["timestamp"]
+
+
+def test_search_word_is_whole_word_only():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "i ate a sandwich"), msg("Alex", "sent", t, "wich one?")]
+    assert stats.search(msgs, word="wich")["total"] == 1
+    assert stats.search(msgs, q="wich")["total"] == 2

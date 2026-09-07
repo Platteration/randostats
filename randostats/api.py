@@ -121,6 +121,17 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     def timing_contacts(limit: int = 20):
         return stats.contact_peaks(messages(), limit=limit)
 
+    @app.get("/api/messages")
+    def search_messages(q: str | None = None, word: str | None = None, contact: str | None = None,
+                        sender: str | None = None, direction: str | None = None, hour: int | None = None,
+                        weekday: int | None = None, month: str | None = None, date: str | None = None,
+                        limit: int = 100, offset: int = 0):
+        if direction and direction not in ("sent", "received"):
+            raise HTTPException(400, "direction must be sent or received")
+        return stats.search(messages(), q=q, word=word, contact=contact, sender=sender, direction=direction,
+                            hour=hour, weekday=weekday, month=month, date=date,
+                            limit=max(1, min(limit, 500)), offset=max(0, offset))
+
     @app.get("/api/stats/conversations")
     def conversations(gap_hours: float = 6.0, limit: int | None = None):
         rows = stats.conversation_health(messages(), gap_hours=gap_hours)

@@ -423,3 +423,50 @@ def group_members(messages: list[Message], contact: str) -> list[dict]:
         })
     rows.sort(key=lambda r: r["count"], reverse=True)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Drill-down: the messages behind a number
+# ---------------------------------------------------------------------------
+
+def search(messages: list[Message], q: str | None = None, word: str | None = None, contact: str | None = None,
+           sender: str | None = None, direction: str | None = None, hour: int | None = None,
+           weekday: int | None = None, month: str | None = None, date: str | None = None,
+           limit: int = 100, offset: int = 0) -> dict:
+    """Filter messages down to the ones behind a chart mark.
+
+    ``q`` is a substring; ``word`` matches whole words only, so clicking the
+    misspelling "wich" doesn't drag in "sandwich".
+    """
+    pattern = re.compile(rf"(?<![A-Za-z']){re.escape(word)}(?![A-Za-z'])", re.IGNORECASE) if word else None
+    needle = q.lower() if q else None
+    hits = []
+    for m in messages:
+        if contact and m.contact != contact:
+            continue
+        if sender and m.sender != sender:
+            continue
+        if direction and m.direction != direction:
+            continue
+        if hour is not None and m.timestamp.hour != hour:
+            continue
+        if weekday is not None and m.timestamp.weekday() != weekday:
+            continue
+        if month and m.timestamp.strftime("%Y-%m") != month:
+            continue
+        if date and m.timestamp.date().isoformat() != date:
+            continue
+        if needle and needle not in m.text.lower():
+            continue
+        if pattern and not pattern.search(m.text):
+            continue
+        hits.append(m)
+    hits.sort(key=lambda m: m.timestamp, reverse=True)
+    page = hits[offset:offset + limit]
+    return {
+        "total": len(hits),
+        "offset": offset,
+        "limit": limit,
+        "messages": [{"contact": m.contact, "sender": m.sender, "direction": m.direction,
+                      "timestamp": m.timestamp.isoformat(sep=" "), "text": m.text} for m in page],
+    }

@@ -74,3 +74,13 @@ def test_conversation_and_member_endpoints(client):
     assert limited["summary"] == body["summary"] and len(limited["rows"]) == 1
     members = client.get("/api/stats/members?contact=Alex").json()
     assert {m["sender"] for m in members} == {"Alex", "Sam"}
+
+
+def test_message_search_endpoint(client):
+    rows = [{"contact": "Alex", "sender": "Sam", "direction": "sent", "timestamp": "2024-01-01T10:00:00", "text": "a sandwich"},
+            {"contact": "Alex", "sender": "Alex", "direction": "received", "timestamp": "2024-01-01T11:00:00", "text": "wich one"}]
+    client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())}, data={"self_name": "Sam", "fmt": "json"})
+    assert client.get("/api/messages?word=wich").json()["total"] == 1
+    assert client.get("/api/messages?q=wich").json()["total"] == 2
+    assert client.get("/api/messages?hour=10").json()["messages"][0]["text"] == "a sandwich"
+    assert client.get("/api/messages?direction=nonsense").status_code == 400

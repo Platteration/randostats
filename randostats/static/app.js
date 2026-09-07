@@ -42,7 +42,9 @@
   const roundedRight = (x, y, w, h, r) => { r = Math.min(r, h / 2, w); return `M${x},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} H${x} Z`; };
 
   // Horizontal stacked bars (two series) with a direct total label at the tip.
-  function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150 }) {
+  const clickable = (node, fn, row) => { if (!fn) return; node.classList.add("clickable"); node.addEventListener("click", () => fn(row)); };
+
+  function hbars(container, rows, { key, keyLabel, series, labels, colors = ["s1", "s2"], tipFn, labelW = 150, onClick }) {
     container.innerHTML = "";
     if (!rows.length) { container.innerHTML = '<div class="empty">Nothing to plot. Import an export on the Import tab.</div>'; return; }
     const right = 70, rowH = 30, barH = 22, top = 8, maxChars = Math.floor(labelW / 7);
@@ -74,6 +76,7 @@
       g.appendChild(el("text", { x: x + 6, y: y + barH / 2 + 4, class: "val" }, fmt(total)));
       const hit = el("rect", { x: 0, y: top + i * rowH, width, height: rowH, class: "hit" });
       hover(hit, tipFn ? tipFn(r) : `<b>${r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      clickable(hit, onClick, r);
       g.appendChild(hit);
       svg.appendChild(g);
     });
@@ -82,7 +85,7 @@
   }
 
   // Vertical stacked columns (two series) on a categorical x axis.
-  function columns(container, rows, { key, series, labels, colors = ["s1", "s2"], xLabel }) {
+  function columns(container, rows, { key, series, labels, colors = ["s1", "s2"], xLabel, onClick }) {
     container.innerHTML = "";
     if (!rows.length || !rows.some(r => series.some(s => r[s] > 0))) { container.innerHTML = '<div class="empty">No messages in this slice.</div>'; return; }
     const width = Math.max(420, container.clientWidth || 420), height = 220, left = 44, bottom = 28, top = 10, right = 8;
@@ -115,6 +118,7 @@
       if (i % every === 0) g.appendChild(el("text", { x: x0 + barW / 2, y: height - 8, "text-anchor": "middle", class: "tick" }, xLabel ? xLabel(r) : r[key]));
       const hit = el("rect", { x: left + i * slot, y: top, width: slot, height: plotH, class: "hit" });
       hover(hit, `<b>${xLabel ? xLabel(r) : r[key]}</b><br>${series.map((s, j) => `${labels[j]}: ${fmt(r[s])}`).join("<br>")}`);
+      clickable(hit, onClick, r);
       g.appendChild(hit);
       svg.appendChild(g);
     });
@@ -123,7 +127,7 @@
   }
 
   // Single-series line with a wash and a crosshair tooltip.
-  function line(container, rows, { key, value, label }) {
+  function line(container, rows, { key, value, label, onClick }) {
     container.innerHTML = "";
     if (rows.length < 2) { container.innerHTML = '<div class="empty">One month of messages is a dot, not a line.</div>'; return; }
     const width = Math.max(600, container.clientWidth || 600), height = 220, left = 48, bottom = 28, top = 12, right = 16;
@@ -158,13 +162,21 @@
       showTip(e, `<b>${rows[i][key]}</b><br>${label}: ${fmt(rows[i][value])}`);
     });
     hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("x1", -10); cross.setAttribute("x2", -10); dot.setAttribute("cx", -10); });
+    if (onClick) {
+      hit.classList.add("clickable");
+      hit.addEventListener("click", (e) => {
+        const rect = svg.getBoundingClientRect();
+        const px = (e.clientX - rect.left) * width / rect.width;
+        onClick(rows[Math.max(0, Math.min(lastI, Math.round((px - left) / plotW * lastI)))]);
+      });
+    }
     svg.appendChild(hit);
     container.appendChild(svg);
     container._table = () => table([key, value], rows, ["Month", label]);
   }
 
   // 7 x 24 heatmap on the sequential blue ramp.
-  function heatmap(container, grid) {
+  function heatmap(container, grid, onClick) {
     container.innerHTML = "";
     const max = Math.max(1, ...grid.flat());
     if (max <= 1 && !grid.flat().some(v => v > 0)) { container.innerHTML = '<div class="empty">No messages in this slice.</div>'; return; }
@@ -179,6 +191,7 @@
         const idx = v === 0 ? -1 : Math.min(steps.length - 1, Math.floor(Math.sqrt(v / max) * steps.length));
         const rect = el("rect", { x: left + h * (cell + gap), y: top + d * (cell + gap), width: cell, height: cell, rx: 3, fill: idx < 0 ? "var(--grid)" : `var(${steps[idx]})` });
         hover(rect, `<b>${days[d]} ${h}:00–${h + 1}:00</b><br>${fmt(v)} messages`);
+        if (v) clickable(rect, onClick, { weekday: d, hour: h, count: v, label: `${days[d]} ${h}:00` });
         svg.appendChild(rect);
       });
     });
@@ -242,6 +255,47 @@
   });
   const chartOrTable = (id, draw) => { const c = $("#" + id); draw(c); if (state.tables.has(id) && c._table) { c.innerHTML = ""; c.appendChild(c._table()); } };
 
+  // ---------- drill-down drawer ----------
+  const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const drawerState = { title: "", params: {}, offset: 0, total: 0 };
+
+  const highlight = (text, word) => {
+    const safe = esc(text);
+    if (!word) return safe;
+    return safe.replace(new RegExp(`(?<![A-Za-z'])(${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?![A-Za-z'])`, "gi"), "<mark>$1</mark>");
+  };
+
+  async function loadDrawer(append = false) {
+    const qs = new URLSearchParams({ ...drawerState.params, limit: 50, offset: drawerState.offset });
+    const q = $("#drawer-q").value.trim();
+    if (q) qs.set("q", q);
+    const data = await api(`/api/messages?${qs}`);
+    drawerState.total = data.total;
+    const html = data.messages.map(m => `<div class="msg ${m.direction}">
+      <div class="meta">${m.direction === "sent" ? "You" : esc(m.sender)}${drawerState.params.contact ? "" : " · " + esc(m.contact)} · ${m.timestamp.slice(0, 16)}</div>
+      <div class="body">${highlight(m.text, drawerState.params.word)}</div></div>`).join("");
+    const list = $("#drawer-list");
+    if (append) list.insertAdjacentHTML("beforeend", html); else { list.innerHTML = html || '<div class="empty">No messages match.</div>'; list.scrollTop = 0; }
+    $("#drawer-sub").textContent = `${fmt(data.total)} message${data.total === 1 ? "" : "s"}`;
+    $("#drawer-more").hidden = drawerState.offset + data.messages.length >= data.total;
+  }
+
+  async function openDrawer(title, params) {
+    drawerState.title = title; drawerState.params = params; drawerState.offset = 0;
+    $("#drawer-title").textContent = title;
+    $("#drawer-q").value = "";
+    $("#drawer").hidden = false; $("#scrim").hidden = false;
+    await loadDrawer();
+    $("#drawer-q").focus();
+  }
+  const closeDrawer = () => { $("#drawer").hidden = true; $("#scrim").hidden = true; };
+  $("#drawer-close").addEventListener("click", closeDrawer);
+  $("#scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  $("#drawer-more").addEventListener("click", async () => { drawerState.offset += 50; await loadDrawer(true); });
+  let qTimer;
+  $("#drawer-q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { drawerState.offset = 0; loadDrawer(); }, 250); });
+
   // ---------- renderers ----------
   const render = {};
   render.people = async () => {
@@ -257,7 +311,8 @@
     const shown = lim ? rows.slice(0, lim) : rows;
     chartOrTable("people-chart", (c) => hbars(c, shown, {
       key: "contact", keyLabel: "Person", series: ["sent", "received"], labels: ["Sent by you", "Received"],
-      tipFn: (r) => `<b>${r.contact}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%`,
+      tipFn: (r) => `<b>${r.contact}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>click to read them</i>`,
+      onClick: (r) => openDrawer(r.contact, { contact: r.contact }),
     }));
     const wordy = [...shown].sort((a, b) => b.avg_words_received - a.avg_words_received).slice(0, 12);
     hbars($("#people-words"), wordy, { key: "contact", series: ["avg_words_received"], labels: ["Average words per message"], colors: ["s2"],
@@ -270,10 +325,15 @@
     const lat = t.reply_latency;
     $("#timing-summary").textContent = t.by_hour.length ? `Peak: ${t.peak_weekday} around ${t.peak_hour}:00 · busiest day ${t.busiest_day.date} (${t.busiest_day.count})` +
       (lat && lat.you_median_minutes != null ? ` · you reply in ~${lat.you_median_minutes} min, they take ~${lat.them_median_minutes ?? "?"} min` : "") : "";
-    chartOrTable("hour-chart", (c) => columns(c, t.by_hour, { key: "hour", series: ["sent", "received"], labels: ["Sent by you", "Received"], xLabel: (r) => `${r.hour}h` }));
-    chartOrTable("weekday-chart", (c) => columns(c, t.by_weekday, { key: "weekday", series: ["sent", "received"], labels: ["Sent by you", "Received"] }));
-    heatmap($("#heatmap"), t.heatmap.length ? t.heatmap : Array.from({ length: 7 }, () => Array(24).fill(0)));
-    chartOrTable("month-chart", (c) => line(c, t.by_month, { key: "month", value: "count", label: "Messages" }));
+    const scope = contact ? { contact } : {};
+    chartOrTable("hour-chart", (c) => columns(c, t.by_hour, { key: "hour", series: ["sent", "received"], labels: ["Sent by you", "Received"], xLabel: (r) => `${r.hour}h`,
+      onClick: (r) => openDrawer(`${contact || "Everyone"} · ${r.hour}:00–${r.hour + 1}:00`, { ...scope, hour: r.hour }) }));
+    chartOrTable("weekday-chart", (c) => columns(c, t.by_weekday, { key: "weekday", series: ["sent", "received"], labels: ["Sent by you", "Received"],
+      onClick: (r) => openDrawer(`${contact || "Everyone"} · ${r.weekday}`, { ...scope, weekday: WD.indexOf(r.weekday) }) }));
+    heatmap($("#heatmap"), t.heatmap.length ? t.heatmap : Array.from({ length: 7 }, () => Array(24).fill(0)),
+      (cell) => openDrawer(`${contact || "Everyone"} · ${cell.label}`, { ...scope, weekday: cell.weekday, hour: cell.hour }));
+    chartOrTable("month-chart", (c) => line(c, t.by_month, { key: "month", value: "count", label: "Messages",
+      onClick: (r) => openDrawer(`${contact || "Everyone"} · ${r.month}`, { ...scope, month: r.month }) }));
     const peaks = await api("/api/stats/timing/contacts?limit=15");
     $("#peaks").innerHTML = peaks.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Messages</th><th>Peak day</th><th>Peak hour</th><th>Hours 0–23</th></tr></thead><tbody>` +
       peaks.map(p => `<tr><td>${dot(p.contact)}${p.contact}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
@@ -326,7 +386,9 @@
       kpi("Per 1,000 words", s.rate_per_1000),
     ].join("");
     chartOrTable("spell-chart", (c) => hbars(c, s.words.map(w => ({ ...w, label: w.suggestion ? `${w.word} → ${w.suggestion}` : w.word })), {
-      key: "label", keyLabel: "Word", labelW: 230, series: ["count"], labels: ["Times"], tipFn: (w) => `<b>${w.word}</b>${w.suggestion ? ` → ${w.suggestion}` : ""}<br>${fmt(w.count)} times<br><i>${w.example.replace(/</g, "&lt;")}</i>`,
+      key: "label", keyLabel: "Word", labelW: 230, series: ["count"], labels: ["Times"],
+      tipFn: (w) => `<b>${w.word}</b>${w.suggestion ? ` → ${w.suggestion}` : ""}<br>${fmt(w.count)} times<br><i>${w.example.replace(/</g, "&lt;")}</i>`,
+      onClick: (w) => openDrawer(`“${w.word}”`, { word: w.word, direction: dir, ...(contact ? { contact } : {}) }),
     }));
     const rows = dir === "sent" ? s.by_contact : s.by_sender, k = dir === "sent" ? "contact" : "sender";
     $("#spell-by-title").textContent = dir === "sent" ? "Who you misspell things to" : "Who misspells the most";
@@ -337,7 +399,8 @@
   render.words = async () => {
     const dir = $("#words-direction").value;
     const rows = await api(`/api/stats/words?limit=30` + (dir ? `&direction=${dir}` : ""));
-    chartOrTable("words-chart", (c) => hbars(c, rows, { key: "word", keyLabel: "Word", series: ["count"], labels: ["Times"] }));
+    chartOrTable("words-chart", (c) => hbars(c, rows, { key: "word", keyLabel: "Word", series: ["count"], labels: ["Times"],
+      onClick: (w) => openDrawer(`“${w.word}”`, { word: w.word, ...(dir ? { direction: dir } : {}) }) }));
   };
 
   // ---------- counterpoint ----------
