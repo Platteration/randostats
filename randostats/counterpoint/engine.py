@@ -91,7 +91,12 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("percent", re.compile(rf"\b(?P<num>{_NUM})\s*(?:%|percent|per cent|pct)\b", re.IGNORECASE)),
     ("percent", re.compile(r"(?P<num>\d+(?:\.\d+)?)%")),
     ("in", re.compile(rf"\b(?P<a>{_NUM})\s+(?:in|out of)\s+(?:every\s+)?(?P<b>{_NUM})\b", re.IGNORECASE)),
-    ("ratio", re.compile(rf"\b(?P<num>{_NUM})\s*(?:x|times)\s+(?:more|as|higher|greater|likelier|faster|bigger|larger|the)\b", re.IGNORECASE)),
+    # "3 times more likely", and any comparative: older, longer, cheaper, faster.
+    # The exclusions are words that merely end in -er ("3 times over", "per").
+    ("ratio", re.compile(
+        rf"\b(?P<num>{_NUM})\s*(?:x|times)\s+"
+        r"(?!over\b|per\b|under\b|after\b|ever\b|never\b|other\b|either\b|whether\b|together\b|however\b|rather\b)"
+        r"(?:\w+er\b|more|less|as|the)\b", re.IGNORECASE)),
     ("twice", re.compile(r"\b(?P<word>twice|double|triple)\s+(?:as|the|more|likely)\b", re.IGNORECASE)),
 ]
 

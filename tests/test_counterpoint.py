@@ -115,3 +115,19 @@ def test_every_voice_renders_every_claim_shape():
 def test_unknown_voice_falls_back_to_house():
     engine = CounterpointEngine(seed=1, voice="does-not-exist")
     assert engine.voice["id"] == "house"
+
+
+def test_ratio_accepts_any_comparative():
+    """"700 times older" is the same shape of claim as "3 times more likely"."""
+    assert claims("dinosaurs were 700 times older") == [("ratio", 700.0)]
+    assert claims("5 times longer than that") == [("ratio", 5.0)]
+    assert claims("10 times cheaper") == [("ratio", 10.0)]
+    assert claims("she is 4 times as tall") == [("ratio", 4.0)]
+    assert claims("2.5 times faster") == [("ratio", 2.5)]
+
+
+def test_ratio_ignores_words_that_merely_end_in_er():
+    """"3 times over" is a count of repetitions, not a multiplier."""
+    for phrase in ("I said it 3 times over", "we met 3 times per week",
+                   "call me 3 times after lunch", "we tried 3 times together"):
+        assert claims(phrase) == [], phrase
