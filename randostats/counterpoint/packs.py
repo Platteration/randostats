@@ -45,7 +45,21 @@ def _packs() -> dict[str, dict]:
 
 @lru_cache(maxsize=1)
 def _voices() -> dict[str, dict]:
-    return {v["id"]: v for v in (_read(p) for p in sorted(VOICE_DIR.glob("*.json")))}
+    """Every voice file, keyed by id. A file without one is named by its path
+    rather than raising, so one bad drop-in cannot stop the app starting."""
+    voices: dict[str, dict] = {}
+    for path in sorted(VOICE_DIR.glob("*.json")):
+        try:
+            data = _read(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        data["id"] = str(data.get("id") or path.stem)
+        voices[data["id"]] = data
+    if not voices:
+        raise RuntimeError(f"no punchline voices found in {VOICE_DIR}")
+    return voices
 
 
 def list_packs(enabled: set[str] | None = None) -> list[dict]:
@@ -55,7 +69,9 @@ def list_packs(enabled: set[str] | None = None) -> list[dict]:
         out.append({"id": pack["id"], "name": pack["name"], "description": pack["description"],
                     "facts": len(pack["facts"]), "always_on": pack["always_on"],
                     "locked": pack["id"] in locked,
-                    "enabled": pack["always_on"] or (enabled is not None and pack["id"] in enabled)})
+                    # A locked pack contributes no facts, so it is not "on".
+                    "enabled": pack["always_on"] or (pack["id"] not in locked
+                                                     and enabled is not None and pack["id"] in enabled)})
     out.sort(key=lambda p: (not p["always_on"], p["name"]))
     return out
 
@@ -75,13 +91,16 @@ def load_facts(packs: set[str] | None = None) -> list[dict]:
 
 def list_voices() -> list[dict]:
     return [{"id": v["id"], "name": v.get("name", v["id"]), "description": v.get("description", ""),
-             "sample": v["percent"][0] if v.get("percent") else ""} for v in sorted(_voices().values(), key=lambda v: v["id"] != DEFAULT_VOICE)]
+             "sample": (v.get("percent") or [""])[0]}
+            for v in sorted(_voices().values(), key=lambda v: v["id"] != DEFAULT_VOICE)]
 
 
 def load_voice(voice_id: str = DEFAULT_VOICE) -> dict:
     voices = _voices()
-    voice = voices.get(voice_id) or voices[DEFAULT_VOICE]
-    house = voices[DEFAULT_VOICE]
+    # The house voice fills any gaps, but must not be assumed to exist: a
+    # renamed file should not be a KeyError at startup.
+    house = voices.get(DEFAULT_VOICE) or next(iter(voices.values()))
+    voice = voices.get(voice_id) or house
     # A voice may leave any list out; the house lines fill the gap.
     return {key: voice.get(key) or house.get(key, []) for key in
             ("percent", "percent_close", "ratio", "fallacy_percent", "fallacy_vague", "fallacy_ratio")

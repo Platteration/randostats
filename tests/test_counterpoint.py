@@ -186,3 +186,49 @@ def test_spurious_pair_survives_a_facts_file_with_nothing_to_pair(tmp_path):
     pair = CounterpointEngine(facts_path=thin, seed=1).spurious_pair()
     assert pair["a"] is None and pair["b"] is None
     assert "Not enough" in pair["line"]
+
+
+def test_a_locked_pack_is_not_reported_as_enabled(monkeypatch):
+    """It contributes no facts, so a chip showing it on is a lie."""
+    from randostats.counterpoint import packs
+
+    monkeypatch.setenv("RANDOSTATS_LOCKED", "sports")
+    rows = {p["id"]: p for p in packs.list_packs({"sports", "money"})}
+    assert rows["sports"]["locked"] is True and rows["sports"]["enabled"] is False
+    assert rows["money"]["enabled"] is True
+    assert "sp-ft" not in {f["id"] for f in packs.load_facts({"sports", "money"})}
+
+
+def test_a_voice_file_without_an_id_does_not_stop_the_app(tmp_path, monkeypatch):
+    from randostats.counterpoint import packs
+
+    (tmp_path / "house.json").write_text(json.dumps({
+        "id": "house", "percent": ["{fact}."], "ratio": ["{fact}."],
+        "fallacy_percent": ["x"], "fallacy_vague": ["x"], "fallacy_ratio": ["x"]}))
+    (tmp_path / "mystery.json").write_text(json.dumps({"percent": ["{fact}!"]}))
+    (tmp_path / "broken.json").write_text("{ not json")
+    monkeypatch.setattr(packs, "VOICE_DIR", tmp_path)
+    packs._voices.cache_clear()
+    try:
+        ids = {v["id"] for v in packs.list_voices()}
+        assert ids == {"house", "mystery"}, ids  # named by filename, bad file skipped
+        borrowed = packs.load_voice("mystery")
+        assert borrowed["percent"] == ["{fact}!"]
+        assert borrowed["fallacy_percent"] == ["x"], "gaps fall back to the house voice"
+    finally:
+        packs._voices.cache_clear()
+
+
+def test_a_missing_house_voice_is_not_a_crash(tmp_path, monkeypatch):
+    from randostats.counterpoint import packs
+
+    (tmp_path / "only.json").write_text(json.dumps({
+        "id": "only", "percent": ["{fact}."], "ratio": ["{fact}."],
+        "fallacy_percent": ["x"], "fallacy_vague": ["x"], "fallacy_ratio": ["x"]}))
+    monkeypatch.setattr(packs, "VOICE_DIR", tmp_path)
+    packs._voices.cache_clear()
+    try:
+        assert packs.load_voice("house")["id"] == "only"
+        assert CounterpointEngine(seed=1, voice="house").respond("70% of people")
+    finally:
+        packs._voices.cache_clear()

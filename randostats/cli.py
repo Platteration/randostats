@@ -51,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
             msgs = list(parsers.whatsapp.parse(data, args.me, contact=args.contact))
         else:
             msgs = parsers.parse(fmt, data, args.me)
+        if not msgs:
+            print(f"parsed as {fmt} but found no messages; check the format and your name", file=sys.stderr)
+            return 1
         store = Store(args.db)
         added = store.add_messages(msgs)
         store.set_setting("self_name", args.me)
@@ -59,8 +62,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "counter":
         from .counterpoint import CounterpointEngine
+        from .counterpoint.packs import DEFAULT_VOICE
 
-        engine = CounterpointEngine()
+        # Answer in whatever voice and packs the app is configured with, so
+        # the terminal and the browser do not contradict each other.
+        store = Store(args.db)
+        engine = CounterpointEngine(
+            packs={p for p in (store.get_setting("packs", "") or "").split(",") if p},
+            voice=store.get_setting("voice", DEFAULT_VOICE))
         results = engine.respond(" ".join(args.text))
         if not results:
             print("No quantitative claim found.")

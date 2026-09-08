@@ -4,6 +4,15 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const NS = "http://www.w3.org/2000/svg";
   const fmt = (n) => n.toLocaleString();
+  // slice() counts UTF-16 units, so it cuts an 11-unit ZWJ emoji into rubble.
+  const graphemes = (s) => {
+    try { return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s)].map(g => g.segment); }
+    catch { return Array.from(s); }
+  };
+  const shorten = (s, max) => {
+    const parts = graphemes(String(s));
+    return parts.length > max ? parts.slice(0, max - 1).join("") + "…" : String(s);
+  };
   const tip = $("#tooltip");
   const state = { contacts: [], tables: new Set(), llm: false, session: null, hues: {} };
 
@@ -113,7 +122,7 @@
       const y = top + i * rowH + (rowH - barH) / 2;
       const g = el("g", { class: "slot" });
       g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 5, "text-anchor": "end", ...(labelSize ? { style: `font-size:${labelSize}px` } : {}) },
-        r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+        shorten(r[key], maxChars)));
       let x = labelW;
       const total = series.reduce((a, s) => a + r[s], 0);
       series.forEach((s, j) => {
@@ -295,7 +304,7 @@
     usable.forEach((r, i) => {
       const y = top + i * rowH + rowH / 2;
       const g = el("g", { class: "slot" });
-      g.appendChild(el("text", { x: labelW - 10, y: y + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+      g.appendChild(el("text", { x: labelW - 10, y: y + 4, "text-anchor": "end" }, shorten(r[key], maxChars)));
       if (r[a] != null && r[b] != null) g.appendChild(el("line", { x1: X(r[a]), x2: X(r[b]), y1: y, y2: y, stroke: "var(--axis)", "stroke-width": 2 }));
       if (r[a] != null) g.appendChild(el("circle", { cx: X(r[a]), cy: y, r: 5, fill: "var(--s1)", stroke: "var(--surface-1)", "stroke-width": 2 }));
       if (r[b] != null) g.appendChild(el("circle", { cx: X(r[b]), cy: y, r: 5, fill: "var(--s2)", stroke: "var(--surface-1)", "stroke-width": 2 }));
@@ -329,7 +338,7 @@
       });
       usable.forEach((r, i) => {
         const v = r[value], y = top + i * rowH + (rowH - barH) / 2, g = el("g", { class: "slot" });
-        g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 4, "text-anchor": "end" }, r[key].length > maxChars ? r[key].slice(0, maxChars - 1) + "…" : r[key]));
+        g.appendChild(el("text", { x: labelW - 10, y: y + barH / 2 + 4, "text-anchor": "end" }, shorten(r[key], maxChars)));
         const x = v >= 0 ? mid : X(v), w = Math.abs(X(v) - mid);
         g.appendChild(el("path", { d: v >= 0 ? roundedRight(x, y, w, barH, 4) : `M${x + 4},${y} h${w - 4} v${barH} h${-(w - 4)} a4,4 0 0 1 -4,-4 v${-(barH - 8)} a4,4 0 0 1 4,-4 z`,
           class: "bar", fill: v >= 0 ? pos : neg, style: `animation:none` }));
@@ -385,7 +394,7 @@
     const btn = e.target.closest("[data-toggle-table]");
     if (!btn) return;
     const id = btn.dataset.toggleTable, c = $("#" + id);
-    if (state.tables.has(id)) { state.tables.delete(id); btn.textContent = "Table"; render[id.split("-")[0]]?.(); }
+    if (state.tables.has(id)) { state.tables.delete(id); btn.textContent = "Table"; runRender(activeTab()); }
     else if (c._table) { state.tables.add(id); btn.textContent = "Chart"; c.innerHTML = ""; c.appendChild(c._table()); }
   });
   const chartOrTable = (id, draw) => { const c = $("#" + id); draw(c); if (state.tables.has(id) && c._table) { c.innerHTML = ""; c.appendChild(c._table()); } };
@@ -421,11 +430,19 @@
     drawerState.title = title; drawerState.params = params; drawerState.offset = 0;
     returnFocusTo = document.activeElement;
     $("#drawer-title").textContent = title;
+    $("#drawer-sub").textContent = "";
     $("#drawer-q").value = "";
+    $("#drawer-list").innerHTML = '<div class="empty">Looking…</div>';
+    $("#drawer-more").hidden = true;
     $("#drawer").hidden = false; $("#scrim").hidden = false;
-    await loadDrawer();
     $("#drawer-q").focus();
-    say(`${title}. ${$("#drawer-sub").textContent}`);
+    try {
+      await loadDrawer();
+      say(`${title}. ${$("#drawer-sub").textContent}`);
+    } catch (err) {
+      $("#drawer-list").innerHTML = `<div class="failure" role="alert">Could not load these messages: ${esc(err.message)}</div>`;
+      say("Could not load these messages.");
+    }
   }
 
   const closeDrawer = () => {
@@ -525,8 +542,12 @@
     const card = $("#members-card"), sel = $("#members-contact");
     card.hidden = !groups.length;
     if (!groups.length) return;
-    if (sel.options.length !== groups.length) {
+    const wanted = groups.map(g => g.contact).join("\u0000");
+    if (sel.dataset.groups !== wanted) {
+      const previous = sel.value;
       sel.innerHTML = groups.map(g => `<option value="${esc(g.contact)}">${esc(g.contact)} (${fmt(g.total)})</option>`).join("");
+      sel.dataset.groups = wanted;
+      if (groups.some(g => g.contact === previous)) sel.value = previous;
     }
     const rows = await api(`/api/stats/members?contact=${encodeURIComponent(sel.value || groups[0].contact)}`);
     $("#members-table").innerHTML = `<table class="data"><thead><tr><th>Member</th><th class="num">Messages</th><th class="num">Share</th><th class="num">Avg words</th><th class="num">Peak hour</th></tr></thead><tbody>` +
@@ -664,10 +685,12 @@
     const sel = $("#wrapped-year");
     const chosen = sel.value;
     const { years, card } = await api("/api/wrapped" + (chosen ? `?year=${chosen}` : ""));
-    if (sel.options.length !== years.length) {
+    const wanted = years.join(",");
+    if (sel.dataset.years !== wanted) {
       sel.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join("");
-      if (card.year) sel.value = card.year;
+      sel.dataset.years = wanted;
     }
+    if (card.year && sel.value !== String(card.year)) sel.value = String(card.year);
     $("#wrapped-card").innerHTML = wrappedSVG(card, card.year ?? "");
   };
 
@@ -723,7 +746,11 @@
   }
   async function counter(text, { live = false } = {}) {
     if (!text.trim()) return;
-    if (live && !state.session) state.session = (await api("/api/counterpoint/session", { method: "POST" })).session;
+    if (live && !state.session) {
+      state.sessionPending = state.sessionPending
+        || api("/api/counterpoint/session", { method: "POST" }).then(r => { state.session = r.session; state.sessionPending = null; });
+      await state.sessionPending;
+    }
     const payload = await api("/api/counterpoint", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, session: live ? state.session : null, llm: $("#counter-llm").checked }) });
     if (live) { if (payload.results.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
@@ -757,13 +784,14 @@
   };
   $("#counter-go").addEventListener("click", () => counter($("#counter-text").value).catch(counterFailed));
   $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value).catch(counterFailed); });
-  $("#counter-random").addEventListener("click", async () => {
+  $("#counter-random").addEventListener("click", () => randomPair().catch(counterFailed));
+  async function randomPair() {
     const p = await api("/api/counterpoint/random");
     const sources = p.a ? `<div class="src">${esc(p.a.source)}, ${p.a.year} · ${esc(p.b.source)}, ${p.b.year}</div>` : "";
     const gap = p.a ? '<div class="gap"><b>The actual problem:</b> two numbers being close is not a relationship. It is arithmetic.</div>' : "";
     $("#counter-results").insertAdjacentHTML("afterbegin",
       `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>${sources}${gap}</div>`);
-  });
+  }
 
   // Live listening via the Web Speech API (Chrome, Edge, Safari).
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -870,7 +898,9 @@
     const btn = tab && $(`.tabs button[data-tab="${tab}"]`);
     if (btn && !btn.classList.contains("active")) switchTab(tab);
   });
-  ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction", "convo-gap"].forEach(id => $("#" + id).addEventListener("change", () => switchTab(location.hash.slice(1) || "people")));
+  const activeTab = () => $(".tabs button.active")?.dataset.tab || "people";
+  ["people-limit", "timing-contact", "spell-direction", "spell-contact", "words-direction", "convo-gap"]
+    .forEach(id => $("#" + id).addEventListener("change", () => runRender(activeTab())));
 
   async function refresh() {
     const st = await api("/api/status");

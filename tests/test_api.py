@@ -185,3 +185,29 @@ def test_importing_invalidates_cached_stats(client):
     client.delete("/api/messages")
     assert client.get("/api/stats/overview").json()["total"] == 0
     assert client.get("/api/stats/contacts").json() == []
+
+
+def test_cli_counter_uses_the_configured_packs_and_voice(tmp_path, capsys):
+    """The terminal and the browser must not contradict each other."""
+    from randostats.cli import main
+    from randostats.store import Store
+
+    db = tmp_path / "cli.db"
+    store = Store(db)
+    store.set_setting("voice", "announcer")
+    store.set_setting("packs", "sports")
+    store.close()
+
+    assert main(["--db", str(db), "counter", "78 percent of people drink beer"]) == 0
+    out = capsys.readouterr().out
+    assert "!" in out, "the announcer voice should be shouting"
+    assert "free throws" in out, "the sports pack should be loaded"
+
+
+def test_cli_import_fails_loudly_on_a_file_it_cannot_read(tmp_path, capsys):
+    from randostats.cli import main
+
+    empty = tmp_path / "nothing.txt"
+    empty.write_text("this is not a chat export at all\n")
+    assert main(["--db", str(tmp_path / "x.db"), "import", str(empty), "--me", "Sam", "--format", "whatsapp"]) == 1
+    assert "no messages" in capsys.readouterr().err
