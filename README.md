@@ -80,6 +80,10 @@ export ANTHROPIC_API_KEY=...        # or `ant auth login`
 randostats serve --llm
 ```
 
+The option only appears when a credential is actually found, and if a request
+fails, is refused, or returns something unusable, the rule-based punchline
+stays on screen rather than the answer disappearing.
+
 Claude only *chooses among and rephrases* the facts the engine already matched
 from `randostats/counterpoint/facts.json`. It is never asked to invent
 statistics, so every number shown still traces to a listed source. Requests use

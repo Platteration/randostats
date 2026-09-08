@@ -10,7 +10,9 @@ reaches the user still traces back to ``facts.json``.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -18,7 +20,23 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from .engine import Counterpoint
 
+log = logging.getLogger(__name__)
+
 MODEL = os.environ.get("RANDOSTATS_MODEL", "claude-opus-5")
+
+_client = None
+_client_lock = threading.Lock()
+
+
+def _get_client():
+    """One client for the process; building it is what resolves the credential."""
+    global _client
+    with _client_lock:
+        if _client is None:
+            import anthropic
+
+            _client = anthropic.Anthropic()
+        return _client
 
 SYSTEM = """You are the wit inside "randostats", a tool that answers a statistic thrown out in an argument
 with a *real* statistic of the same magnitude that has nothing to do with it, to show that a matching
@@ -39,23 +57,49 @@ class Rebuttal(BaseModel):
     logic_gap: str
 
 
+def _has_credential(client) -> bool:
+    """Whether a credential resolves, without spending a request to find out.
+
+    Building a client proves nothing: the SDK resolves lazily, so it succeeds
+    with no credential at all and only fails at request time with "Could not
+    resolve authentication method". These two attributes are the sources it
+    draws on - a static key or token, and an ``ant auth login`` profile.
+    """
+    try:
+        if client.auth_headers:  # ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN
+            return True
+        return getattr(client, "credentials", None) is not None  # ant auth login
+    except AttributeError:  # an SDK shaped differently: let the call decide
+        return True
+
+
 def available() -> bool:
+    """True when the package is installed and a credential is actually there.
+
+    Without the credential check the app offered a feature that failed on
+    every use: the checkbox appeared, and every rebuttal quietly fell back.
+    """
     if os.environ.get("RANDOSTATS_LLM", "").lower() in ("0", "false", "no", "off"):
         return False
     try:
-        import anthropic  # noqa: F401
-    except ImportError:
+        client = _get_client()
+    except Exception as exc:  # noqa: BLE001 - the package is missing or refuses to build
+        log.info("Claude rebuttals unavailable: %s", exc)
+        return False
+    if not _has_credential(client):
+        log.info("Claude rebuttals unavailable: no Anthropic credential found")
         return False
     return True
 
 
 def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None:
-    """Ask Claude to choose among the matched facts and phrase the rebuttal. Returns None on any failure."""
+    """Ask Claude to choose among the matched facts and phrase the rebuttal.
+
+    Returns None on any failure, and means it: the rule-based punchline is
+    already on screen, so a missing credential, a refusal or a network blip
+    must degrade quietly rather than fail the request.
+    """
     if not counterpoints:
-        return None
-    try:
-        import anthropic
-    except ImportError:
         return None
 
     facts = "\n".join(
@@ -63,9 +107,8 @@ def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None
         for cp in counterpoints
     )
     prompt = f"Claim made in the argument: \"{claim_text}\"\n\nVerified facts to choose from:\n{facts}"
-    client = anthropic.Anthropic()
     try:
-        response = client.beta.messages.parse(
+        response = _get_client().beta.messages.parse(
             model=MODEL,
             max_tokens=1024,
             system=SYSTEM,
@@ -75,12 +118,19 @@ def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
         )
-    except anthropic.APIError:
+    except Exception as exc:  # noqa: BLE001 - see the docstring; nothing here is worth a 500
+        log.warning("Claude rebuttal failed, keeping the rule-based one: %s", exc)
         return None
+
+    # A refusal carries no usable content, so read stop_reason first.
     if response.stop_reason == "refusal" or response.parsed_output is None:
         return None
     parsed = response.parsed_output
+    if not parsed.punchline.strip() or not parsed.logic_gap.strip():
+        return None
+    # Claude picks among the facts we matched; it never supplies its own.
     valid_ids = {cp.fact.id for cp in counterpoints}
     if parsed.fact_id not in valid_ids:
         parsed.fact_id = counterpoints[0].fact.id
-    return {"fact_id": parsed.fact_id, "punchline": parsed.punchline, "logic_gap": parsed.logic_gap, "model": response.model}
+    return {"fact_id": parsed.fact_id, "punchline": parsed.punchline.strip(),
+            "logic_gap": parsed.logic_gap.strip(), "model": response.model}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
@@ -247,7 +248,12 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
             by_claim: dict[str, list] = {}
             for r in results:
                 by_claim.setdefault(r.claim.key, []).append(r)
-            payload["llm"] = {key: llm.sharpen(group[0].claim.raw, group) for key, group in by_claim.items()}
+            # One round trip per claim, run together: a sentence with three
+            # claims should not take three times as long to answer.
+            groups = list(by_claim.items())
+            with ThreadPoolExecutor(max_workers=min(4, len(groups))) as pool:
+                sharpened = pool.map(lambda g: (g[0], llm.sharpen(g[1][0].claim.raw, g[1])), groups)
+                payload["llm"] = {key: value for key, value in sharpened if value}
         return payload
 
     @app.post("/api/counterpoint/session")
