@@ -102,7 +102,7 @@ def test_no_counterpoints_means_nothing_to_sharpen():
 
 def test_a_missing_credential_is_reported_not_raised(monkeypatch, counterpoints):
     """anthropic.Anthropic() raises AnthropicError, which is APIError's parent."""
-    import anthropic
+    anthropic = pytest.importorskip("anthropic", reason="the llm extra is optional")
 
     def refuse():
         raise anthropic.AnthropicError("The api_key client option must be set")
@@ -171,3 +171,22 @@ def test_availability_needs_a_credential_not_just_a_client(monkeypatch):
 def test_an_unfamiliar_sdk_shape_does_not_disable_a_working_feature(monkeypatch):
     monkeypatch.setattr(llm, "_client", SimpleNamespace())
     assert llm.available() is True
+
+
+def test_a_broken_credential_probe_never_stops_the_app_starting(monkeypatch, tmp_path):
+    """available() runs inside create_app; raising here would break `serve --llm`."""
+    class Hostile:
+        @property
+        def auth_headers(self):
+            raise RuntimeError("this SDK does not work that way")
+
+    monkeypatch.setattr(llm, "_client", Hostile())
+    assert llm.available() is True  # unrecognised shape: let the call decide
+
+    def explode():
+        raise RuntimeError("cannot build a client at all")
+
+    monkeypatch.setattr(llm, "_get_client", explode)
+    assert llm.available() is False
+    with TestClient(create_app(tmp_path / "probe.db", use_llm=True)) as client:
+        assert client.get("/api/status").json()["llm"] is False

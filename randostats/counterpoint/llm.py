@@ -69,7 +69,7 @@ def _has_credential(client) -> bool:
         if client.auth_headers:  # ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN
             return True
         return getattr(client, "credentials", None) is not None  # ant auth login
-    except AttributeError:  # an SDK shaped differently: let the call decide
+    except Exception:  # noqa: BLE001 - an SDK shaped differently: let the call decide
         return True
 
 
@@ -82,12 +82,11 @@ def available() -> bool:
     if os.environ.get("RANDOSTATS_LLM", "").lower() in ("0", "false", "no", "off"):
         return False
     try:
-        client = _get_client()
-    except Exception as exc:  # noqa: BLE001 - the package is missing or refuses to build
+        if not _has_credential(_get_client()):
+            log.info("Claude rebuttals unavailable: no Anthropic credential found")
+            return False
+    except Exception as exc:  # noqa: BLE001 - never let a probe stop the app starting
         log.info("Claude rebuttals unavailable: %s", exc)
-        return False
-    if not _has_credential(client):
-        log.info("Claude rebuttals unavailable: no Anthropic credential found")
         return False
     return True
 
