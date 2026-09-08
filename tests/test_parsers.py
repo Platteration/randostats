@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from randostats import parsers
 from randostats.parsers import generic, smsbackup, whatsapp
 
@@ -157,3 +159,59 @@ def test_json_exports_are_told_apart():
 def test_mojibake_leaves_clean_text_alone():
     assert meta.mojibake("café") == "café"
     assert meta.mojibake("plain ascii") == "plain ascii"
+
+
+# --- findings from a review of the parsers; each of these was wrong before ---
+
+def test_ios_bidi_marks_do_not_hide_who_you_are():
+    """iOS wraps names in U+202A/U+202C, which str.strip() leaves in place, so
+    a one-to-one chat was filed as a group and the contact came out as you."""
+    export = "‪1/2/24, 9:15 PM‬ - ‪Alex‬: hey\n1/2/24, 9:16 PM - Sam: hi\n"
+    msgs = list(whatsapp.parse(export.encode(), "Sam"))
+    assert [m.contact for m in msgs] == ["Alex", "Alex"]
+    assert [m.direction for m in msgs] == ["received", "sent"]
+    assert msgs[0].sender == "Alex"
+
+
+def test_system_notices_are_skipped_not_glued_to_the_message_above():
+    export = ("1/2/24, 9:15 PM - Alex: hey\n"
+              "1/2/24, 9:16 PM - Messages are end-to-end encrypted\n"
+              "1/2/24, 9:17 PM - Alex: still here\n")
+    assert [m.text for m in whatsapp.parse(export.encode(), "Sam")] == ["hey", "still here"]
+    # a genuine wrapped line is still joined to its message
+    wrapped = "1/2/24, 9:15 PM - Alex: first line\nsecond line\n"
+    assert list(whatsapp.parse(wrapped.encode(), "Sam"))[0].text == "first line\nsecond line"
+
+
+def test_a_numbered_mailbox_column_means_what_sms_means_by_it():
+    sms = b"contact,type,timestamp,text\nAlex,1,2024-01-01T10:00:00,in\nAlex,2,2024-01-01T10:01:00,out\n"
+    assert [m.direction for m in generic.parse_csv(sms, "Sam")] == ["received", "sent"]
+    # is_from_me keeps its own meaning: 1 is you
+    mine = b"contact,is_from_me,timestamp,text\nAlex,1,2024-01-01T10:00:00,a\nAlex,0,2024-01-01T10:01:00,b\n"
+    assert [m.direction for m in generic.parse_csv(mine, "Sam")] == ["sent", "received"]
+    worded = b"contact,direction,timestamp,text\nAlex,received,2024-01-01T10:00:00,a\n"
+    assert [m.direction for m in generic.parse_csv(worded, "Sam")] == ["received"]
+
+
+def test_a_row_naming_nobody_is_unknown_not_the_word_none():
+    (m,) = generic.parse_csv(b"timestamp,text\n2024-01-01T10:00:00,hello\n", "Sam")
+    assert m.contact == "Unknown" and m.sender == "Unknown"
+
+
+def test_declared_entities_are_refused_before_they_expand():
+    """A few hundred bytes of nested entities expand to fill memory."""
+    bomb = (b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "AAAAAAAAAA">'
+            b'<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]><smses><sms body="&b;"/></smses>')
+    with pytest.raises(ValueError, match="entities"):
+        list(smsbackup.parse(bomb, "Sam"))
+    plain = (b'<?xml version="1.0"?><smses><sms address="1" date="1704229200000" type="1" '
+             b'body="hi" contact_name="Alex"/></smses>')
+    assert len(list(smsbackup.parse(plain, "Sam"))) == 1
+
+
+def test_a_byte_order_mark_does_not_hide_the_format():
+    payload = _json.dumps(TELEGRAM).encode()
+    assert parsers.detect_format("result.json", payload) == "telegram"
+    assert parsers.detect_format("result.json", b"\xef\xbb\xbf" + payload) == "telegram"
+    csv = b"contact,sender,direction,timestamp,text\nA,A,received,2024-01-01T10:00:00,hi\n"
+    assert parsers.detect_format("x.csv", b"\xef\xbb\xbf" + csv) == "csv"

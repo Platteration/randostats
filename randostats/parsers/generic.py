@@ -29,12 +29,18 @@ _ALIASES = {
 }
 
 
-def _pick(row: dict[str, Any], key: str) -> Any:
+def _pick_alias(row: dict[str, Any], key: str) -> tuple[str | None, Any]:
+    """The column that supplied the value, and the value. The column matters:
+    ``type=1`` means received in an SMS export but sent in an is_from_me one."""
     lowered = {str(k).strip().lower(): v for k, v in row.items()}
     for alias in _ALIASES[key]:
         if alias in lowered and lowered[alias] not in (None, ""):
-            return lowered[alias]
-    return None
+            return alias, lowered[alias]
+    return None, None
+
+
+def _pick(row: dict[str, Any], key: str) -> Any:
+    return _pick_alias(row, key)[1]
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -60,14 +66,21 @@ def parse_timestamp(value: Any) -> datetime | None:
     return None
 
 
-def _direction(value: Any, sender: str | None, self_name: str) -> str:
+# SMS and MMS exports number the mailbox rather than describing it.
+_MAILBOX_COLUMNS = ("type", "msg_box")
+_MAILBOX = {"1": "received", "2": "sent"}
+
+
+def _direction(alias: str | None, value: Any, sender: str | None, self_name: str) -> str:
     if isinstance(value, bool):
         return "sent" if value else "received"
     if value is not None:
         s = str(value).strip().lower()
-        if s in ("sent", "out", "outgoing", "true", "1", "yes", "me", "2"):
+        if alias in _MAILBOX_COLUMNS and s in _MAILBOX:
+            return _MAILBOX[s]
+        if s in ("sent", "out", "outgoing", "true", "1", "yes", "me"):
             return "sent"
-        if s in ("received", "in", "incoming", "inbound", "false", "0", "no", "1 ", "them"):
+        if s in ("received", "in", "incoming", "inbound", "false", "0", "no", "them"):
             return "received"
     if sender and sender.strip().lower() == self_name.strip().lower():
         return "sent"
@@ -80,10 +93,13 @@ def _row_to_message(row: dict[str, Any], self_name: str, source: str) -> Message
     if text is None or ts is None:
         return None
     sender = _pick(row, "sender")
-    direction = _direction(_pick(row, "direction"), sender, self_name)
+    alias, raw_direction = _pick_alias(row, "direction")
+    direction = _direction(alias, raw_direction, sender, self_name)
     contact = _pick(row, "contact")
     if contact is None:
-        contact = self_name if direction == "sent" and sender is None else (sender if direction == "received" else "Unknown")
+        # With no contact column the other party is the best we have; a row
+        # that names nobody is "Unknown", never the string "None".
+        contact = sender if (direction == "received" and sender) else "Unknown"
     if sender is None:
         sender = self_name if direction == "sent" else str(contact)
     return Message(contact=str(contact), sender=str(sender), direction=direction, timestamp=ts, text=str(text), source=source)

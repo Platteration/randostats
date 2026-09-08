@@ -25,6 +25,11 @@ def _ts(ms: str | None) -> datetime | None:
 
 
 def parse(data: bytes, self_name: str) -> Iterable[Message]:
+    # ElementTree expands internal entities without limit, so a few hundred
+    # bytes of nested declarations can fill memory. No real backup declares
+    # any, so refuse the file rather than parse it.
+    if b"<!ENTITY" in data:
+        raise ValueError("this XML declares entities, which this importer will not expand")
     root = ET.fromstring(data)
     for el in root.iter():
         if el.tag == "sms":

@@ -153,3 +153,82 @@ def test_store_survives_concurrent_use():
         assert not errors, errors
         assert store.count() == 8 * 40
         store.close()
+
+
+def test_reimporting_after_correcting_your_own_name_does_not_double_the_database():
+    """The app tells you to fix your name and import again; that used to give
+    you two copies of every message you had sent."""
+    import json
+    import tempfile
+
+    from randostats import parsers
+    from randostats.store import Store
+
+    rows = [{"contact": "Alex", "direction": "sent", "timestamp": "2024-01-01T10:00:00", "text": "hi"},
+            {"contact": "Alex", "sender": "Alex", "direction": "received", "timestamp": "2024-01-01T10:01:00", "text": "hey"}]
+    data = json.dumps(rows).encode()
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "name.db")
+        assert store.add_messages(parsers.parse("json", data, "Samm")) == 2
+        assert store.add_messages(parsers.parse("json", data, "Sam")) == 0
+        assert store.count() == 2
+        store.close()
+
+
+def test_two_people_saying_the_same_thing_at_once_are_still_two_messages():
+    import tempfile
+    from datetime import datetime
+
+    from randostats.models import Message
+    from randostats.store import Store
+
+    moment = datetime(2024, 2, 1, 12, 0, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        store = Store(Path(tmp) / "group.db")
+        added = store.add_messages([Message("Trip", "Alex", "received", moment, "ok"),
+                                    Message("Trip", "Priya", "received", moment, "ok")])
+        assert added == 2
+        store.close()
+
+
+def test_an_old_database_is_deduplicated_when_it_is_opened():
+    import sqlite3
+    import tempfile
+
+    from randostats.store import Store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "old.db"
+        conn = sqlite3.connect(path)
+        conn.executescript("""
+            CREATE TABLE messages (id INTEGER PRIMARY KEY, contact TEXT NOT NULL, sender TEXT NOT NULL,
+              direction TEXT NOT NULL CHECK (direction IN ('sent','received')), ts TEXT NOT NULL,
+              text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'unknown',
+              UNIQUE (contact, sender, ts, text));
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO messages (contact, sender, direction, ts, text) VALUES
+              ('Alex','Sam','sent','2024-01-02 21:16:00','hi'),
+              ('Alex','Samm','sent','2024-01-02 21:16:00','hi'),
+              ('Alex','Alex','received','2024-01-02 21:15:00','hey');""")
+        conn.commit()
+        conn.close()
+        store = Store(path)
+        assert store.count() == 2, "the duplicate pair should collapse on open"
+        store.close()
+
+
+def test_a_counterpoint_session_id_has_to_be_one_we_issued(client):
+    """Otherwise any client could grow the session map without limit."""
+    from randostats.api import MAX_SESSIONS
+
+    app_sessions = None
+    made_up = client.post("/api/counterpoint", json={"text": "70% of people", "session": "not-ours"}).json()
+    assert made_up["results"], "an unknown id must not break the request"
+    again = client.post("/api/counterpoint", json={"text": "70% of people", "session": "not-ours"}).json()
+    assert again["results"], "and it must not silently start deduplicating either"
+
+    issued = client.post("/api/counterpoint/session").json()["session"]
+    first = client.post("/api/counterpoint", json={"text": "70% of people", "session": issued}).json()
+    second = client.post("/api/counterpoint", json={"text": "70% of people", "session": issued}).json()
+    assert first["results"] and second["results"] == []
+    assert MAX_SESSIONS > 0

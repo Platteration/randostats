@@ -66,7 +66,7 @@ def detect_format(filename: str, data: bytes) -> str | None:
         if "channel.json" in inside or "/messages/c" in inside:
             return "discord"
         return None
-    stripped = data.lstrip()
+    stripped = data.removeprefix(b"\xef\xbb\xbf").lstrip()
     if stripped.startswith(b"<?xml") or stripped.startswith(b"<smses"):
         return "smsbackup"
     if stripped.startswith(b"[") or stripped.startswith(b"{"):

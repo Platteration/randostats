@@ -31,6 +31,21 @@ _LINE = re.compile(
     re.VERBOSE,
 )
 
+# iOS wraps timestamps and names in bidirectional control characters, which
+# str.strip() does not remove. Left in, the user's own name never matches and
+# a one-to-one chat is filed as a group.
+_BIDI = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]")
+
+# A line that opens with a timestamp but carries no "Name: " is a system
+# notice ("Messages are end-to-end encrypted", "You were added"). It is not a
+# continuation of the message above it.
+_TIMESTAMPED = re.compile(r"^\[?\d{1,4}[./-]\d{1,2}[./-]\d{1,4},?\s+\d{1,2}:\d{2}")
+
+
+def _clean_line(raw: str) -> str:
+    return _BIDI.sub("", raw).strip()
+
+
 _DATE_FORMATS = (
     "%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%d/%m/%Y",
     "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d",
@@ -40,7 +55,7 @@ _TIME_FORMATS = ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p", "%I:%M%p", "%I:
 
 def looks_like_whatsapp(head: bytes) -> bool:
     text = head.decode("utf-8", errors="replace")
-    return any(_LINE.match(line.strip()) for line in text.splitlines()[:20])
+    return any(_LINE.match(_clean_line(line)) for line in text.splitlines()[:20])
 
 
 def _parse_timestamp(date: str, time: str, day_first: bool | None) -> datetime | None:
@@ -76,7 +91,7 @@ def _guess_day_first(dates: list[str]) -> bool | None:
 def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[Message]:
     text = data.decode("utf-8-sig", errors="replace")
     lines = text.splitlines()
-    matches = [(_LINE.match(line.strip()), line) for line in lines]
+    matches = [(_LINE.match(_clean_line(line)), line) for line in lines]
     day_first = _guess_day_first([m.group("date") for m, _ in matches if m][:500])
 
     # The contact is whoever isn't the user; for a group, the export has no
@@ -85,10 +100,12 @@ def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[M
     for m, _ in matches:
         if m and m.group("sender") not in senders:
             senders.append(m.group("sender"))
-    others = [s for s in senders if s.strip().lower() != self_name.strip().lower()]
+    self_key = _BIDI.sub("", self_name).strip().lower()
+    others = [s for s in senders if s.strip().lower() != self_key]
     if contact is None:
         contact = others[0] if len(others) == 1 else ("Group chat" if others else self_name)
 
+    self_key = _BIDI.sub("", self_name).strip().lower()
     current: dict | None = None
     for m, raw in matches:
         if m:
@@ -98,8 +115,13 @@ def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[M
             if ts is None:
                 current = None
                 continue
-            sender = m.group("sender").strip().lstrip("‪").rstrip("‬")
-            current = {"sender": sender, "ts": ts, "text": [m.group("text")], "self": sender.lower() == self_name.strip().lower()}
+            sender = m.group("sender").strip()
+            current = {"sender": sender, "ts": ts, "text": [m.group("text")], "self": sender.lower() == self_key}
+        elif _TIMESTAMPED.match(_clean_line(raw)):
+            # A system notice. End the message above it and keep neither.
+            if current:
+                yield _finish(current, contact)
+            current = None
         elif current is not None and raw.strip():
             current["text"].append(raw)
     if current:

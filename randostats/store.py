@@ -17,6 +17,12 @@ from .models import Message
 
 DEFAULT_DB = Path(os.environ.get("RANDOSTATS_DB", "data/randostats.db"))
 
+# What makes a message the same message on a second import. Deliberately not
+# the stored `sender`: for messages you sent that holds the name you typed on
+# the import form, so correcting a misspelling of your own name and importing
+# again - exactly what the app tells you to do - used to double the database.
+IDENTITY = "contact, direction, ts, text, CASE WHEN direction = 'sent' THEN '' ELSE sender END"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
     id        INTEGER PRIMARY KEY,
@@ -50,6 +56,18 @@ class Store:
         self.lock = threading.Lock()
         with self.lock:
             self.conn.executescript(_SCHEMA)
+            self._ensure_identity_index()
+
+    def _ensure_identity_index(self) -> None:
+        """Add the identity index, collapsing any duplicates an older build left."""
+        existing = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_identity'").fetchone()
+        if existing:
+            return
+        with self.conn:
+            self.conn.execute(
+                f"DELETE FROM messages WHERE id NOT IN (SELECT MIN(id) FROM messages GROUP BY {IDENTITY})")
+            self.conn.execute(f"CREATE UNIQUE INDEX idx_messages_identity ON messages ({IDENTITY})")
 
     # -- settings ---------------------------------------------------------
     def get_setting(self, key: str, default: str | None = None) -> str | None:

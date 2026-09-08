@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -12,6 +13,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from . import parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
@@ -28,6 +30,10 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024 * 1024
+
+# Live-listening sessions are only there to stop the same spoken claim being
+# answered twice. Ids come from us, and old ones fall off the end.
+MAX_SESSIONS = 256
 
 
 class PackConfig(BaseModel):
@@ -69,6 +75,10 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     @lru_cache(maxsize=1)
     def speller() -> stats.Speller:
         return stats.Speller()
+
+    # Building the dictionary takes over a second, and it is the only cold
+    # path a user waits on. Do it while they are still choosing a file.
+    threading.Thread(target=speller, name="speller-warmup", daemon=True).start()
 
     @lru_cache(maxsize=1)
     def messages_cache(version: int):  # version busts the cache after an import
@@ -118,6 +128,11 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     @app.post("/api/import")
     async def import_file(file: UploadFile = File(...), self_name: str = Form(...), fmt: str = Form("auto"),
                           contact: str | None = Form(None)):
+        # The multipart header usually declares the size; refuse before reading.
+        declared = getattr(file, "size", None)
+        if declared is not None and declared > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit; "
+                                     "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
         data = await file.read()
         if not data:
             raise HTTPException(400, "empty file")
@@ -128,18 +143,22 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
             fmt = parsers.detect_format(file.filename or "", data) or ""
             if not fmt:
                 raise HTTPException(400, "could not work out the export format; pick one from the list")
-        try:
+        def read_and_store() -> list:
             if fmt == "whatsapp" and contact:
-                msgs = list(parsers.whatsapp.parse(data, self_name, contact=contact))
-            else:
-                msgs = parsers.parse(fmt, data, self_name)
+                return list(parsers.whatsapp.parse(data, self_name, contact=contact))
+            return parsers.parse(fmt, data, self_name)
+
+        try:
+            # Parsing and inserting a large export takes seconds of CPU; off
+            # the event loop it does not stall every other request.
+            msgs = await run_in_threadpool(read_and_store)
         except parsers.archive.ArchiveTooLarge as exc:
             raise HTTPException(413, str(exc)) from exc
         except Exception as exc:  # parser errors are user-facing
             raise HTTPException(400, f"could not parse as {fmt}: {exc}") from exc
         if not msgs:
             raise HTTPException(400, f"parsed as {fmt} but found no messages; check the format and your name")
-        added = store.add_messages(msgs)
+        added = await run_in_threadpool(store.add_messages, msgs)
         store.set_setting("self_name", self_name)
         bump()
         directions = {m.direction for m in msgs}
@@ -238,10 +257,9 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     # -- counterpoint ---------------------------------------------------------
     @app.post("/api/counterpoint")
     def counterpoint(req: CounterRequest):
-        seen = None
+        # Only ids we issued are honoured, so a client cannot grow this map.
         session = req.session
-        if session:
-            seen = sessions.setdefault(session, set())
+        seen = sessions.get(session) if session else None
         results = cp["engine"].respond(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
         payload = {"session": session, "results": [r.to_dict() for r in results]}
         if results and llm_on and req.llm:
@@ -258,6 +276,8 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
 
     @app.post("/api/counterpoint/session")
     def new_session():
+        while len(sessions) >= MAX_SESSIONS:
+            sessions.pop(next(iter(sessions)))  # dicts keep insertion order
         sid = uuid.uuid4().hex[:12]
         sessions[sid] = set()
         return {"session": sid}
