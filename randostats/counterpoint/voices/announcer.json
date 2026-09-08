@@ -3,10 +3,8 @@
   "name": "Sports announcer",
   "description": "Same statistics, considerably more shouting.",
   "percent": [
-    "OH, THAT'S A BIG NUMBER! But folks, {fact_lc}! SAME FIGURE! COMPLETELY UNRELATED! The crowd goes quiet!",
     "And here comes the counter! {fact}! Within {gap} of that claim! Does it prove anything? IT DOES NOT!",
-    "{fact}! Ladies and gentlemen, by that logic {subject_or_that} is brought to you by {short}!",
-    "WHAT A STATISTIC! And equally true: {fact_lc}! Two numbers, one coincidence, zero evidence!"
+    "{fact}! Ladies and gentlemen, by that logic {subject_or_that} is brought to you by {short}!"
   ],
   "ratio": [
     "A MULTIPLIER! And what a comparison: {fact_lc}! Still no baseline in sight!",
@@ -25,5 +23,9 @@
   "fallacy_ratio": [
     "{v} TIMES MORE LIKELY! From what to what? One in a million to {v} in a million is still nothing!",
     "A multiplier with no baseline! That's a foul in every league!"
+  ],
+  "percent_close": [
+    "OH, THAT'S A BIG NUMBER! But folks, {fact_lc}! SAME FIGURE! COMPLETELY UNRELATED! The crowd goes quiet!",
+    "WHAT A STATISTIC! And equally true: {fact_lc}! Two numbers, one coincidence, zero evidence!"
   ]
 }

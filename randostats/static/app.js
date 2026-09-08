@@ -759,8 +759,10 @@
   $("#counter-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) counter($("#counter-text").value).catch(counterFailed); });
   $("#counter-random").addEventListener("click", async () => {
     const p = await api("/api/counterpoint/random");
-    $("#counter-results").insertAdjacentHTML("afterbegin", `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>
-      <div class="src">${esc(p.a.source)}, ${p.a.year} · ${esc(p.b.source)}, ${p.b.year}</div><div class="gap"><b>The actual problem:</b> two numbers being close is not a relationship. It is arithmetic.</div></div>`);
+    const sources = p.a ? `<div class="src">${esc(p.a.source)}, ${p.a.year} · ${esc(p.b.source)}, ${p.b.year}</div>` : "";
+    const gap = p.a ? '<div class="gap"><b>The actual problem:</b> two numbers being close is not a relationship. It is arithmetic.</div>' : "";
+    $("#counter-results").insertAdjacentHTML("afterbegin",
+      `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>${sources}${gap}</div>`);
   });
 
   // Live listening via the Web Speech API (Chrome, Edge, Safari).

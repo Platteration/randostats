@@ -4,10 +4,7 @@
   "description": "Dry, quick, and slightly tired of your argument.",
   "percent": [
     "Counterpoint: {fact}. By the same logic, {subject_or_that} is caused by {short}.",
-    "Sure. And {fact_lc}. Same number, zero connection, exactly as much proof.",
-    "{fact}. That's within {gap} of your figure, so clearly {short} explains it.",
-    "Fun fact of identical magnitude: {fact_lc}. Neither number proves anything about the other.",
-    "{claim_v}% is also roughly {short}. Coincidence? Yes. Entirely."
+    "{fact}. That's within {gap} of your figure, so clearly {short} explains it."
   ],
   "ratio": [
     "Counterpoint: {fact}. So '{fact_v}x' is also how much {short} beats its baseline, and nobody argues about that.",
@@ -27,5 +24,10 @@
   "fallacy_ratio": [
     "Relative risk hides absolute risk: '{v}x more likely' can mean going from 1 in a million to {v} in a million.",
     "A multiplier needs a baseline. {v} times more than what, measured on whom?"
+  ],
+  "percent_close": [
+    "Sure. And {fact_lc}. Same number, zero connection, exactly as much proof.",
+    "Fun fact of identical magnitude: {fact_lc}. Neither number proves anything about the other.",
+    "{claim_v}% is also roughly {short}. Coincidence? Yes. Entirely."
   ]
 }

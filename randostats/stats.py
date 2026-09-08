@@ -17,6 +17,9 @@ from .models import Message
 
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
+# Below this many conversations, a share is noise rather than a habit.
+MIN_CONVERSATIONS_TO_JUDGE = 5
+
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*[A-Za-z]|[A-Za-z]")
 _URL = re.compile(r"https?://\S+|www\.\S+")
 _MENTION = re.compile(r"[@#]\w+")
@@ -64,7 +67,13 @@ def is_media_placeholder(text: str) -> bool:
 
 
 def words_of(text: str) -> list[str]:
-    return [w for w in _WORD.findall(_sanitise(text))]
+    """Words, with the typographic apostrophe folded to the straight one.
+
+    iOS and WhatsApp write U+2019, and every check downstream (the noise
+    filter, the dictionary, the stopword list) expects "'". Normalising once
+    here keeps "did’nt" visible instead of silently dropping it as noise.
+    """
+    return [w.replace("\u2019", "'") for w in _WORD.findall(_sanitise(text))]
 
 
 # ---------------------------------------------------------------------------
@@ -93,11 +102,14 @@ def overview(messages: list[Message]) -> dict:
 def contact_frequency(messages: list[Message], limit: int | None = None) -> list[dict]:
     """Messages per contact, split by direction, sorted by total desc."""
     by_contact: dict[str, dict] = defaultdict(lambda: {"sent": 0, "received": 0, "words_sent": 0, "words_received": 0,
+                                                       "counted_sent": 0, "counted_received": 0,
                                                        "first": None, "last": None, "senders": Counter()})
     for m in messages:
         c = by_contact[m.contact]
         c[m.direction] += 1
-        c["words_" + m.direction] += len(words_of(m.text))
+        if not is_media_placeholder(m.text):
+            c["words_" + m.direction] += len(words_of(m.text))
+            c["counted_" + m.direction] += 1
         c["first"] = m.timestamp if c["first"] is None or m.timestamp < c["first"] else c["first"]
         c["last"] = m.timestamp if c["last"] is None or m.timestamp > c["last"] else c["last"]
         if m.direction == "received":
@@ -112,8 +124,8 @@ def contact_frequency(messages: list[Message], limit: int | None = None) -> list
             "sent": c["sent"],
             "received": c["received"],
             "sent_share": round(c["sent"] / total, 3) if total else 0,
-            "avg_words_sent": round(c["words_sent"] / c["sent"], 1) if c["sent"] else 0,
-            "avg_words_received": round(c["words_received"] / c["received"], 1) if c["received"] else 0,
+            "avg_words_sent": round(c["words_sent"] / c["counted_sent"], 1) if c["counted_sent"] else 0,
+            "avg_words_received": round(c["words_received"] / c["counted_received"], 1) if c["counted_received"] else 0,
             "first": c["first"].isoformat(),
             "last": c["last"].isoformat(),
             "active_days": days,
@@ -267,7 +279,7 @@ class Speller:
         lw = word.lower().replace("’", "'")
         if lw in self._cache:
             return self._cache[lw]
-        bad = lw not in self.checker and lw.rstrip("'s") not in self.checker
+        bad = lw not in self.checker and lw.removesuffix("'s") not in self.checker
         self._cache[lw] = bad
         return bad
 
@@ -279,8 +291,17 @@ class Speller:
         return self._suggest_cache[lw]
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_END = re.compile(r"[.!?]\s").search
+
+
 def _looks_like_name(word: str, position: int) -> bool:
-    """Capitalised mid-sentence words are probably names; skip them."""
+    """Capitalised mid-sentence words are probably names; skip them.
+
+    ``position`` is the index within its own sentence, not the message: a word
+    opening a second sentence is capitalised by grammar, not because it is a
+    name, and used to escape the spell check entirely.
+    """
     return position > 0 and word[0].isupper()
 
 
@@ -313,17 +334,25 @@ def misspellings(messages: list[Message], speller: Speller | None = None, direct
     for m in messages:
         if m.direction != direction or (contact and m.contact != contact) or is_media_placeholder(m.text):
             continue
-        words = words_of(m.text)
-        words_total += len(words)
-        for i, w in enumerate(words):
-            if _is_noise(w) or _looks_like_name(w, i):
-                continue
-            if speller.is_misspelled(w):
-                lw = w.lower()
-                counts[lw] += 1
-                examples.setdefault(lw, m.text[:140])
-                by_contact[m.contact][lw] += 1
-                by_sender[m.sender][lw] += 1
+        # Sentence by sentence, so capitalisation is only read as a name where
+        # grammar did not force it. A shouted message carries no such signal.
+        shouted = m.text.isupper()
+        # Most messages are one sentence with no terminal punctuation at all,
+        # so the split is skipped unless there is something to split.
+        text = m.text
+        sentences = _SENTENCE_SPLIT.split(text) if _SENTENCE_END(text) else (text,)
+        for sentence in sentences:
+            words = words_of(sentence)
+            words_total += len(words)
+            for i, w in enumerate(words):
+                if _is_noise(w) or (not shouted and _looks_like_name(w, i)):
+                    continue
+                if speller.is_misspelled(w):
+                    lw = w.lower()
+                    counts[lw] += 1
+                    examples.setdefault(lw, m.text[:140])
+                    by_contact[m.contact][lw] += 1
+                    by_sender[m.sender][lw] += 1
     top = counts.most_common(limit)
     rows = [{"word": w, "count": c, "suggestion": speller.suggest(w), "example": examples[w]} for w, c in top]
     total_bad = sum(counts.values())
@@ -422,8 +451,11 @@ def conversation_summary(rows: list[dict]) -> dict:
     total = sum(r["conversations"] for r in rows) or 1
     you_replies = [r["you_reply_median"] for r in rows if r["you_reply_median"] is not None]
     them_replies = [r["them_reply_median"] for r in rows if r["them_reply_median"] is not None]
-    # The person most likely to leave your message unanswered at the end of a conversation.
-    ghost = max(rows, key=lambda r: (r["you_closed_share"], r["conversations"]))
+    # The person most likely to leave your message unanswered at the end of a
+    # conversation. A single unanswered message is not a habit, so contacts
+    # with too little history cannot win this.
+    frequent = [r for r in rows if r["conversations"] >= MIN_CONVERSATIONS_TO_JUDGE]
+    ghost = max(frequent, key=lambda r: (r["you_closed_share"], r["conversations"])) if frequent else None
     return {
         "conversations": sum(r["conversations"] for r in rows),
         "you_opened_share": round(sum(r["you_opened"] for r in rows) / total, 3),
@@ -431,7 +463,7 @@ def conversation_summary(rows: list[dict]) -> dict:
         "you_reply_median": round(median(you_replies), 1) if you_replies else None,
         "them_reply_median": round(median(them_replies), 1) if them_replies else None,
         "double_texts": sum(r["your_double_texts"] for r in rows),
-        "ghosted_by": {"contact": ghost["contact"], "share": ghost["you_closed_share"]} if ghost["conversations"] else None,
+        "ghosted_by": {"contact": ghost["contact"], "share": ghost["you_closed_share"]} if ghost else None,
     }
 
 
@@ -446,12 +478,13 @@ def group_members(messages: list[Message], contact: str) -> list[dict]:
     rows = []
     for sender, items in by_sender.items():
         hours = Counter(m.timestamp.hour for m in items)
-        words = sum(len(words_of(m.text)) for m in items)
+        spoken = [m for m in items if not is_media_placeholder(m.text)]
+        words = sum(len(words_of(m.text)) for m in spoken)
         rows.append({
             "sender": sender,
             "count": len(items),
             "share": round(len(items) / len(msgs), 3),
-            "avg_words": round(words / len(items), 1),
+            "avg_words": round(words / len(spoken), 1) if spoken else 0,
             "peak_hour": hours.most_common(1)[0][0],
             "first": min(m.timestamp for m in items).isoformat(),
             "last": max(m.timestamp for m in items).isoformat(),
@@ -474,7 +507,10 @@ def search(messages: list[Message], q: str | None = None, word: str | None = Non
     ``q`` is a substring; ``word`` matches whole words only, so clicking the
     misspelling "wich" doesn't drag in "sandwich".
     """
-    pattern = re.compile(rf"(?<![A-Za-z']){re.escape(word)}(?![A-Za-z'])", re.IGNORECASE) if word else None
+    # Words are stored with a straight apostrophe but the message may hold the
+    # typographic one, so clicking "did'nt" must still find "did’nt".
+    escaped = re.escape(word.replace("\u2019", "'")).replace("'", "['\u2019]") if word else ""
+    pattern = re.compile(rf"(?<![A-Za-z'\u2019]){escaped}(?![A-Za-z'\u2019])", re.IGNORECASE) if word else None
     needle = q.lower() if q else None
     hits = []
     for m in messages:
@@ -653,7 +689,8 @@ def wrapped(messages: list[Message], year: int | None = None, speller: "Speller 
         "received": ov["received"],
         "sent_share": round(ov["sent"] / ov["total"], 3) if ov["total"] else 0,
         "per_day": ov["per_day"],
-        "words_written": sum(len(words_of(m.text)) for m in msgs if m.direction == "sent"),
+        "words_written": sum(len(words_of(m.text)) for m in msgs
+                             if m.direction == "sent" and not is_media_placeholder(m.text)),
         "people": ov["contacts"],
         "top_contact": {"contact": contacts[0]["contact"], "total": contacts[0]["total"],
                         "sent": contacts[0]["sent"], "received": contacts[0]["received"]} if contacts else None,

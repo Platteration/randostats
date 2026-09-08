@@ -1,3 +1,5 @@
+import json
+
 from randostats.counterpoint import CounterpointEngine, extract_claims
 
 
@@ -131,3 +133,56 @@ def test_ratio_ignores_words_that_merely_end_in_er():
     for phrase in ("I said it 3 times over", "we met 3 times per week",
                    "call me 3 times after lunch", "we tried 3 times together"):
         assert claims(phrase) == [], phrase
+
+
+# --- findings from a review of engine.py; each of these was wrong before ---
+
+def test_percent_sign_is_read_with_or_without_a_space():
+    """The word boundary applied to "%" too, so these matched nothing at all."""
+    assert claims("70 % of people") == [("percent", 70.0)]
+    assert claims("seventy% of people") == [("percent", 70.0)]
+    assert claims("70% of people") == [("percent", 70.0)]
+    assert claims("70 percent of people") == [("percent", 70.0)]
+
+
+def test_a_comma_can_be_a_decimal_point_or_a_thousands_separator():
+    assert claims("12,5% of people") == [("percent", 12.5)]  # was read as 5%
+    assert claims("1,500 people came") == []  # not a percentage at all
+
+
+def test_times_later_counts_occasions_not_multiples():
+    assert claims("she texted me 5 times later that night") == []
+    assert claims("we spoke 3 times earlier") == []
+    assert claims("5 times longer") == [("ratio", 5.0)]  # a real comparative still works
+
+
+def test_no_voice_calls_two_distant_numbers_the_same():
+    """The old guard filtered wording found in one voice, so the others said
+    "identical" and "same number" at any distance."""
+    from randostats.counterpoint import packs
+    from randostats.counterpoint.engine import CLOSE_ENOUGH
+
+    for voice in packs.list_voices():
+        loaded = packs.load_voice(voice["id"])
+        close = loaded["percent_close"]
+        assert close, f"{voice['id']} marks no lines as close-only"
+        assert loaded["percent"], f"{voice['id']} has no general lines left"
+        engine = CounterpointEngine(seed=5, voice=voice["id"])
+        for value in range(0, 101, 7):
+            for result in engine.respond(f"{value} percent of people own a boat"):
+                if result.gap > CLOSE_ENOUGH:
+                    for template in close:
+                        stem = template.split("{")[0].strip()
+                        if len(stem) > 12:
+                            assert stem not in result.lines[0], (
+                                f"{voice['id']} claimed sameness at a gap of {result.gap}")
+
+
+def test_spurious_pair_survives_a_facts_file_with_nothing_to_pair(tmp_path):
+    thin = tmp_path / "thin.json"
+    thin.write_text(json.dumps({"facts": [
+        {"id": "only", "kind": "percent", "value": 50, "statement": "Half of something",
+         "short": "half", "source": "somewhere", "year": 2020, "tags": []}]}))
+    pair = CounterpointEngine(facts_path=thin, seed=1).spurious_pair()
+    assert pair["a"] is None and pair["b"] is None
+    assert "Not enough" in pair["line"]

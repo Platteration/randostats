@@ -4,7 +4,6 @@
   "description": "Patient, pedantic, and about to ask for your methodology.",
   "percent": [
     "An interesting figure. Observe that {fact_lc}. The two are unrelated, which is rather the point.",
-    "Noted. {fact}. Two quantities of equal size are not thereby connected; that is arithmetic, not evidence.",
     "Consider: {fact_lc}. Your number differs from it by {gap}. I invite you to explain the mechanism.",
     "{fact}. If magnitude implied causation, we would conclude that {subject_or_that} follows from {short}. We do not."
   ],
@@ -25,5 +24,8 @@
   "fallacy_ratio": [
     "Relative risk without absolute risk is close to meaningless. {v} times a very small number remains a very small number.",
     "Multiplied against what? A ratio requires a stated baseline to carry any information."
+  ],
+  "percent_close": [
+    "Noted. {fact}. Two quantities of equal size are not thereby connected; that is arithmetic, not evidence."
   ]
 }

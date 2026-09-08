@@ -180,3 +180,67 @@ def test_media_placeholders_still_detected_after_the_fast_path():
         assert stats.is_media_placeholder(text), text
     for text in ("omit nothing here", "we deleted the plan? no", "hello there", "attach the file later"):
         assert not stats.is_media_placeholder(text), text
+
+
+# --- findings from a review of stats.py; each of these was wrong before ---
+
+def test_curly_apostrophes_are_not_treated_as_noise():
+    """iOS and WhatsApp write U+2019, so these typos were invisible."""
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "i did’nt go and it was’nt great")]
+    found = {w["word"] for w in stats.misspellings(msgs, stats.Speller())["words"]}
+    assert found == {"did'nt", "was'nt"}
+    # words_of is where the apostrophe is normalised; every check downstream
+    # (the noise filter, the dictionary) then sees the straight form.
+    assert stats.words_of("did’nt") == ["did'nt"]
+    assert not stats._is_noise("did'nt")
+
+
+def test_search_finds_either_apostrophe():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "i did’nt go")]
+    assert stats.search(msgs, word="did'nt")["total"] == 1
+    assert stats.search(msgs, word="did’nt")["total"] == 1
+
+
+def test_possessive_stripping_does_not_eat_real_letters():
+    """rstrip("'s") took every trailing s: "posess" became "pose", a real word."""
+    speller = stats.Speller()
+    assert speller.is_misspelled("posess")
+    assert speller.is_misspelled("acess")
+    assert not speller.is_misspelled("cat's")
+
+
+def test_capitalisation_only_excuses_a_word_that_opens_its_own_sentence():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "we went to the store. Definately worth it"),
+            msg("Alex", "sent", t + timedelta(minutes=1), "THIS IS DEFINATELY SHOUTING")]
+    found = {w["word"]: w["count"] for w in stats.misspellings(msgs, stats.Speller())["words"]}
+    assert found.get("definately") == 2, found
+    # a genuine name mid-sentence is still left alone
+    quiet = [msg("Alex", "sent", t, "i saw Siobhan yesterday")]
+    assert stats.misspellings(quiet, stats.Speller())["words"] == []
+
+
+def test_media_placeholders_are_not_words_anybody_wrote():
+    t = datetime(2024, 1, 1, 9)
+    msgs = [msg("Alex", "sent", t, "<Media omitted>"),
+            msg("Alex", "sent", t + timedelta(minutes=1), "hi there friend"),
+            msg("Alex", "received", t + timedelta(minutes=2), "image omitted", sender="Alex")]
+    row = stats.contact_frequency(msgs)[0]
+    assert row["avg_words_sent"] == 3.0, "the placeholder must not count as two words"
+    assert row["avg_words_received"] == 0
+    assert stats.wrapped(msgs, 2024, stats.Speller())["words_written"] == 3
+    members = stats.group_members(msgs, "Alex")
+    assert {m["sender"]: m["avg_words"] for m in members}["Me"] == 3.0
+
+
+def test_one_unanswered_message_is_not_a_ghosting_habit():
+    rows = [{"contact": "Barely know them", "conversations": 1, "you_closed_share": 1.0, "you_opened": 0,
+             "you_closed": 1, "your_double_texts": 0, "you_reply_median": None, "them_reply_median": None},
+            {"contact": "Best friend", "conversations": 300, "you_closed_share": 0.62, "you_opened": 150,
+             "you_closed": 186, "your_double_texts": 40, "you_reply_median": 5, "them_reply_median": 6}]
+    assert stats.conversation_summary(rows)["ghosted_by"]["contact"] == "Best friend"
+    # nobody has enough history to judge
+    thin = [dict(rows[0])]
+    assert stats.conversation_summary(thin)["ghosted_by"] is None

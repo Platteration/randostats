@@ -24,6 +24,9 @@ from pathlib import Path
 
 from .packs import CORE_PATH as FACTS_PATH, DEFAULT_VOICE, load_facts, load_voice
 
+# Percentage points within which two figures can fairly be called the same.
+CLOSE_ENOUGH = 3.0
+
 # ---------------------------------------------------------------------------
 # Number words
 # ---------------------------------------------------------------------------
@@ -53,8 +56,13 @@ def words_to_number(phrase: str) -> float | None:
     return float(total)
 
 
+_DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+
+
 def _numberish(s: str) -> float | None:
-    s = s.strip().lower().replace(",", "")
+    """"12,5" is twelve and a half; "1,500" is fifteen hundred."""
+    s = s.strip().lower()
+    s = s.replace(",", ".") if _DECIMAL_COMMA.fullmatch(s) else s.replace(",", "")
     try:
         return float(s)
     except ValueError:
@@ -88,14 +96,15 @@ _SUBJECT_STOP = re.compile(r"[.!?;,]|\b(?:but|because|so|which|and|then|therefor
 
 # Each pattern matches only the numeric core; the subject is whatever follows it up to a clause boundary.
 _PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("percent", re.compile(rf"\b(?P<num>{_NUM})\s*(?:%|percent|per cent|pct)\b", re.IGNORECASE)),
-    ("percent", re.compile(r"(?P<num>\d+(?:\.\d+)?)%")),
+    ("percent", re.compile(rf"\b(?P<num>{_NUM})\s*(?:%|percent\b|per cent\b|pct\b)", re.IGNORECASE)),
+    ("percent", re.compile(r"(?P<num>\d+(?:[.,]\d+)?)\s*%")),
     ("in", re.compile(rf"\b(?P<a>{_NUM})\s+(?:in|out of)\s+(?:every\s+)?(?P<b>{_NUM})\b", re.IGNORECASE)),
     # "3 times more likely", and any comparative: older, longer, cheaper, faster.
     # The exclusions are words that merely end in -er ("3 times over", "per").
     ("ratio", re.compile(
         rf"\b(?P<num>{_NUM})\s*(?:x|times)\s+"
-        r"(?!over\b|per\b|under\b|after\b|ever\b|never\b|other\b|either\b|whether\b|together\b|however\b|rather\b)"
+        r"(?!over\b|per\b|under\b|after\b|ever\b|never\b|other\b|either\b|whether\b|together\b"
+        r"|however\b|rather\b|later\b|earlier\b)"
         r"(?:\w+er\b|more|less|as|the)\b", re.IGNORECASE)),
     ("twice", re.compile(r"\b(?P<word>twice|double|triple)\s+(?:as|the|more|likely)\b", re.IGNORECASE)),
 ]
@@ -254,9 +263,15 @@ class CounterpointEngine:
             "claim_v": self._fmt(claim.value),
             "fact_v": self._fmt(fact.value),
         }
-        pool = list(self.voice["ratio"] if claim.kind == "ratio" else self.voice["percent"])
-        if claim.kind == "percent" and gap > 3:
-            pool = [t for t in pool if "identical" not in t and "Coincidence" not in t]
+        if claim.kind == "ratio":
+            pool = list(self.voice["ratio"])
+        else:
+            pool = list(self.voice["percent"])
+            # Lines calling the two figures the same are only usable when they
+            # nearly are. Each voice marks its own rather than the engine
+            # guessing from the wording.
+            if gap <= CLOSE_ENOUGH:
+                pool += list(self.voice.get("percent_close") or [])
         self.rng.shuffle(pool)
         lines = [t.format(**ctx) for t in pool[:2]]
         lines.append(f"Source: {fact.source}, {fact.year}.")
@@ -298,7 +313,12 @@ class CounterpointEngine:
                 gap = abs(a.value - b.value)
                 if gap <= 2.5:
                     best.append((gap, a, b))
-        gap, a, b = self.rng.choice(best) if best else (0.0, percents[0], percents[1])
+        if not best:
+            if len(percents) < 2:
+                return {"a": None, "b": None, "gap": None,
+                        "line": "Not enough percentages loaded to find a coincidence."}
+            best = [(abs(percents[0].value - percents[1].value), percents[0], percents[1])]
+        gap, a, b = self.rng.choice(best)
         return {
             "a": a.to_dict(), "b": b.to_dict(), "gap": round(gap, 2),
             "line": f"{a.statement}. {b.statement}. Gap: {gap:g} points. Clearly one causes the other.",

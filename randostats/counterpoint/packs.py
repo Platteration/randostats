@@ -84,4 +84,5 @@ def load_voice(voice_id: str = DEFAULT_VOICE) -> dict:
     house = voices[DEFAULT_VOICE]
     # A voice may leave any list out; the house lines fill the gap.
     return {key: voice.get(key) or house.get(key, []) for key in
-            ("percent", "ratio", "fallacy_percent", "fallacy_vague", "fallacy_ratio")} | {"id": voice["id"], "name": voice.get("name", voice["id"])}
+            ("percent", "percent_close", "ratio", "fallacy_percent", "fallacy_vague", "fallacy_ratio")
+            } | {"id": voice["id"], "name": voice.get("name", voice["id"])}
