@@ -17,6 +17,11 @@ from randostats.api import create_app
 from randostats.counterpoint import CounterpointEngine, llm
 
 
+# The app only answers to the names it is meant to be reached by, so a test
+# client has to use one of them (the default "testserver" is not one).
+LOCAL = "http://localhost"
+
+
 @pytest.fixture(autouse=True)
 def no_cached_client(monkeypatch):
     monkeypatch.setattr(llm, "_client", None)
@@ -120,7 +125,7 @@ def test_the_off_switch_wins_over_a_working_credential(monkeypatch):
 def test_the_endpoint_degrades_when_claude_says_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", lambda claim, group: None)
-    with TestClient(create_app(tmp_path / "llm.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm.db", use_llm=True), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is True
         body = client.post("/api/counterpoint", json={"text": "70% of people drink beer"}).json()
         assert body["results"], "the rule-based answer must still be there"
@@ -137,7 +142,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", sharpen)
-    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True), base_url=LOCAL) as client:
         body = client.post("/api/counterpoint", json={
             "text": "70% of people drink beer, and dinosaurs were 700 times older"}).json()
     assert len(calls) == 2, f"expected one call per claim, got {calls}"
@@ -146,7 +151,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
 
 def test_llm_is_off_unless_asked_for(tmp_path):
-    with TestClient(create_app(tmp_path / "off.db", use_llm=False)) as client:
+    with TestClient(create_app(tmp_path / "off.db", use_llm=False), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is False
         assert "llm" not in client.post("/api/counterpoint", json={"text": "70% of people"}).json()
 
@@ -188,5 +193,25 @@ def test_a_broken_credential_probe_never_stops_the_app_starting(monkeypatch, tmp
 
     monkeypatch.setattr(llm, "_get_client", explode)
     assert llm.available() is False
-    with TestClient(create_app(tmp_path / "probe.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "probe.db", use_llm=True), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is False
+
+
+def test_one_request_cannot_fan_out_into_unlimited_paid_calls(tmp_path, monkeypatch):
+    """Every distinct claim was one Claude request, and a pasted article holds
+    hundreds. The rule-based answers still cover the rest."""
+    from randostats.api import MAX_LLM_GROUPS
+
+    calls: list[str] = []
+
+    def sharpen(claim_text, group):
+        calls.append(claim_text)
+        return {"fact_id": group[0].fact.id, "punchline": "p", "logic_gap": "g", "model": "stub"}
+
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "sharpen", sharpen)
+    text = " ".join(f"{i + 1}% of group{i} agree." for i in range(30))
+    with TestClient(create_app(tmp_path / "fanout.db", use_llm=True), base_url=LOCAL) as client:
+        body = client.post("/api/counterpoint", json={"text": text}).json()
+    assert len(body["results"]) > MAX_LLM_GROUPS, "the rule-based answers are not capped"
+    assert len(calls) <= MAX_LLM_GROUPS, f"{len(calls)} paid calls for one request"

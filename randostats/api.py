@@ -5,14 +5,15 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import parsers, stats
@@ -35,6 +36,36 @@ MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024
 # answered twice. Ids come from us, and old ones fall off the end.
 MAX_SESSIONS = 256
 
+# Nothing here asks for a password: whatever reaches the port can read every
+# message and delete the lot. A page on the internet can point a name it owns
+# at 127.0.0.1 (DNS rebinding) and then talk to this server *same-origin*, so
+# CORS never comes into it. Two checks stop that: the Host header has to be a
+# name we agreed to serve, and a mutating request has to come from us.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# A pasted article holds thousands of claims, and each one costs CPU here and,
+# with --llm, a paid API call. Bound the text, and the fan-out (see
+# extract_claims, which bounds the claims).
+MAX_TEXT_CHARS = 4000
+MAX_LLM_GROUPS = 4
+
+
+def _netloc(value: str) -> str:
+    """``host[:port]`` out of a Host or Origin header, lowercased."""
+    value = value.strip().lower()
+    if "//" in value:  # an Origin carries a scheme
+        value = value.split("//", 1)[1]
+    return value.split("/", 1)[0]
+
+
+def _hostname(value: str) -> str:
+    """The name on its own: no scheme, no port, no IPv6 brackets."""
+    netloc = _netloc(value)
+    if netloc.startswith("["):  # [::1]:8765
+        return netloc[1:].partition("]")[0]
+    return netloc.rpartition(":")[0] if netloc.count(":") == 1 else netloc
+
 
 class PackConfig(BaseModel):
     """Which fact packs are loaded and which voice writes the punchlines."""
@@ -44,18 +75,44 @@ class PackConfig(BaseModel):
 
 
 class CounterRequest(BaseModel):
-    text: str
+    # Long text is not a feature here: one sentence is the whole idea, and an
+    # unbounded one is the cheapest way to spend the owner's CPU and API budget.
+    text: str = Field(max_length=MAX_TEXT_CHARS)
     session: str | None = None
     per_claim: int = 2
     llm: bool = True
 
 
-def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) -> FastAPI:
+def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
+               allowed_hosts: Sequence[str] | None = None) -> FastAPI:
     app = FastAPI(title="randostats", version="0.1.0")
+    # Host names this server answers to. "*" turns the check off for someone
+    # who knows what they are doing (see `randostats serve --allow-host`).
+    hosts = {_hostname(h) for h in (LOOPBACK_HOSTS if allowed_hosts is None else allowed_hosts)}
+    any_host = "*" in hosts
+
+    def refuse(request) -> JSONResponse | None:
+        """Why this request must not be answered at all, if it must not."""
+        host = request.headers.get("host", "")
+        if not any_host and _hostname(host) not in hosts:
+            # A name that resolves to this machine is not a name we serve.
+            return JSONResponse({"detail": "invalid host header; pass --allow-host to serve this name"},
+                                status_code=400)
+        if request.method not in SAFE_METHODS:
+            # multipart/form-data needs no CORS preflight, so /api/import is
+            # reachable from any page in the browser unless the browser's own
+            # account of where the request came from is checked.
+            site = request.headers.get("sec-fetch-site")
+            origin = request.headers.get("origin")
+            if (site is not None and site not in ("same-origin", "none")) or \
+                    (origin is not None and _netloc(origin) != _netloc(host)):
+                return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+        return None
 
     @app.middleware("http")
-    async def security_headers(request, call_next):
-        response = await call_next(request)
+    async def security_guard(request, call_next):
+        refusal = refuse(request)
+        response = refusal if refusal is not None else await call_next(request)
         response.headers.setdefault("Content-Security-Policy", CSP)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -267,8 +324,10 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
             for r in results:
                 by_claim.setdefault(r.claim.key, []).append(r)
             # One round trip per claim, run together: a sentence with three
-            # claims should not take three times as long to answer.
-            groups = list(by_claim.items())
+            # claims should not take three times as long to answer. Capped, so
+            # one request cannot fan out into an unbounded number of paid
+            # calls; the rule-based answer still covers the claims past it.
+            groups = list(by_claim.items())[:MAX_LLM_GROUPS]
             with ThreadPoolExecutor(max_workers=min(4, len(groups))) as pool:
                 sharpened = pool.map(lambda g: (g[0], llm.sharpen(g[1][0].claim.raw, g[1])), groups)
                 payload["llm"] = {key: value for key, value in sharpened if value}

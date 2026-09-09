@@ -6,10 +6,15 @@ from fastapi.testclient import TestClient
 from randostats.api import create_app
 
 
+# The app only answers to the names it is meant to be reached by, so a test
+# client has to use one of them (the default "testserver" is not one).
+LOCAL = "http://localhost"
+
+
 @pytest.fixture
 def client(tmp_path):
     app = create_app(tmp_path / "t.db", use_llm=False)
-    with TestClient(app) as c:
+    with TestClient(app, base_url=LOCAL) as c:
         yield c
 
 
@@ -119,9 +124,9 @@ def test_pack_choice_survives_a_restart(tmp_path):
     from randostats.api import create_app
 
     db = tmp_path / "p.db"
-    with TestClient(create_app(db, use_llm=False)) as first:
+    with TestClient(create_app(db, use_llm=False), base_url=LOCAL) as first:
         first.post("/api/counterpoint/packs", json={"packs": ["money"], "voice": "victorian"})
-    with TestClient(create_app(db, use_llm=False)) as second:
+    with TestClient(create_app(db, use_llm=False), base_url=LOCAL) as second:
         cfg = second.get("/api/counterpoint/packs").json()
         assert cfg["voice"] == "victorian"
         assert {p["id"] for p in cfg["packs"] if p["enabled"]} == {"core", "money"}
@@ -211,3 +216,13 @@ def test_cli_import_fails_loudly_on_a_file_it_cannot_read(tmp_path, capsys):
     empty.write_text("this is not a chat export at all\n")
     assert main(["--db", str(tmp_path / "x.db"), "import", str(empty), "--me", "Sam", "--format", "whatsapp"]) == 1
     assert "no messages" in capsys.readouterr().err
+
+
+def test_counterpoint_refuses_more_text_than_a_claim_needs(client):
+    """An unbounded body is the cheapest way to spend the owner's CPU (and,
+    with --llm, their API budget) from outside."""
+    from randostats.api import MAX_TEXT_CHARS
+
+    assert client.post("/api/counterpoint", json={"text": "70% of people. " * 5000}).status_code == 422
+    ok = client.post("/api/counterpoint", json={"text": "70% of people. ".ljust(MAX_TEXT_CHARS)})
+    assert ok.status_code == 200 and ok.json()["results"]

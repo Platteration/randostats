@@ -136,12 +136,21 @@ def _clean_subject(rest: str) -> str:
     return re.sub(r"\s+", " ", rest).strip(" ,.-")[:80]
 
 
-def extract_claims(text: str) -> list[Claim]:
+# An answer is per claim, and nobody reads twenty rebuttals. A pasted article
+# is otherwise thousands of claims, each costing a match, a render and (with
+# --llm) a paid call.
+MAX_CLAIMS = 20
+
+
+def extract_claims(text: str, limit: int = MAX_CLAIMS) -> list[Claim]:
     claims: list[tuple[int, Claim]] = []
-    spans: list[tuple[int, int]] = []
+    # Which characters an earlier pattern has already claimed. A scan of the
+    # spans recorded so far would be linear in the claims found, making the
+    # whole extraction quadratic in the length of the text.
+    covered = bytearray(len(text))
 
     def taken(m: re.Match) -> bool:
-        return any(not (m.end() <= s or m.start() >= e) for s, e in spans)
+        return any(covered[m.start():m.end()])
 
     def add(m: re.Match, kind: str, value: float, quantifier: str = "exact", noun: str = "") -> None:
         tail = _tail(text, m.end())
@@ -150,10 +159,14 @@ def extract_claims(text: str) -> list[Claim]:
             subject = f"{noun} {subject}".strip()
         raw = re.sub(r"\s+", " ", text[m.start():m.end() + len(tail)]).strip(" ,.-")
         claims.append((m.start(), Claim(kind, value, raw, subject, quantifier)))
-        spans.append((m.start(), m.end()))
+        covered[m.start():m.end()] = b"\x01" * (m.end() - m.start())
 
     for kind, pat in _PATTERNS:
+        if len(claims) >= limit:
+            break
         for m in pat.finditer(text):
+            if len(claims) >= limit:
+                break
             if taken(m):
                 continue
             if kind == "percent":
@@ -172,7 +185,11 @@ def extract_claims(text: str) -> list[Claim]:
                 add(m, "ratio", float({"twice": 2, "double": 2, "triple": 3}[m.group("word").lower()]))
 
     for pat, value in _VAGUE:
+        if len(claims) >= limit:
+            break
         for m in pat.finditer(text):
+            if len(claims) >= limit:
+                break
             if taken(m):
                 continue
             noun = m.groupdict().get("noun") or ""

@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
@@ -18,8 +21,8 @@ jobs:
         extras: ["dev", "dev,llm"]
     name: py${{ matrix.python-version }} [${{ matrix.extras }}]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -29,3 +32,19 @@ jobs:
         run: pytest -q
       - name: Check the front end parses
         run: node --check randostats/static/app.js
+
+  packaged:
+    runs-on: ubuntu-latest
+    name: non-editable install
+    # An editable install reads the data files out of the checkout, so it
+    # cannot tell whether the packs and voices are in the built package.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the built package
+        run: pip install .
+      - name: Run it from somewhere the checkout is not importable
+        run: cd "$RUNNER_TEMP" && randostats counter "70% of people"

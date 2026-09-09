@@ -26,7 +26,8 @@ build-backend = "setuptools.build_meta"
 include = ["randostats*"]
 
 [tool.setuptools.package-data]
-randostats = ["static/*", "counterpoint/*.json"]
+randostats = ["static/*", "counterpoint/*.json",
+              "counterpoint/packs/*.json", "counterpoint/voices/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

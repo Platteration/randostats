@@ -19,6 +19,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
+    s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                   help="also answer requests whose Host header is NAME (repeatable). Only loopback names are "
+                        "served by default, so a page on the internet cannot point a name it owns at this port. "
+                        "Pass '*' to turn the check off.")
 
     i = sub.add_parser("import", help="import an export file from the terminal")
     i.add_argument("file", type=Path)
@@ -34,9 +38,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         import uvicorn
 
-        from .api import create_app
+        from .api import LOOPBACK_HOSTS, create_app
 
-        uvicorn.run(create_app(args.db, use_llm=args.llm), host=args.host, port=args.port)
+        # Binding to a name of your own means browsing to it, so it has to be
+        # served; 0.0.0.0 and :: are binds, not names, and say nothing about
+        # what a browser will ask for.
+        hosts = [*LOOPBACK_HOSTS, *args.allow_host]
+        if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
+            hosts.append(args.host)
+        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
         return 0
 
     if args.cmd == "import":

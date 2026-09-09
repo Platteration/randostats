@@ -42,6 +42,15 @@ randostats serve                     # http://127.0.0.1:8765
 Open the app, go to **Import**, and either click **Load sample data** or import
 your own export (see the help panel on that tab for how to export from each app).
 
+It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses anything
+that posts to it from another site. There is no login, so whatever reaches the
+port can read every message you imported, and a page on the internet can point
+a name it owns at 127.0.0.1 and try. To reach it under another name, say which:
+
+```bash
+randostats serve --host 0.0.0.0 --allow-host laptop.lan
+```
+
 You can also import from the terminal:
 
 ```bash

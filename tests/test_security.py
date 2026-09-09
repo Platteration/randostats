@@ -17,9 +17,14 @@ from randostats.parsers import archive
 APP_JS = Path(__file__).resolve().parent.parent / "randostats" / "static" / "app.js"
 
 
+# The app only answers to the names it is meant to be reached by, so a test
+# client has to use one of them (the default "testserver" is not one).
+LOCAL = "http://localhost"
+
+
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / "sec.db", use_llm=False)) as c:
+    with TestClient(create_app(tmp_path / "sec.db", use_llm=False), base_url=LOCAL) as c:
         yield c
 
 
@@ -232,3 +237,79 @@ def test_a_counterpoint_session_id_has_to_be_one_we_issued(client):
     second = client.post("/api/counterpoint", json={"text": "70% of people", "session": issued}).json()
     assert first["results"] and second["results"] == []
     assert MAX_SESSIONS > 0
+
+
+# -- who is allowed to talk to us -------------------------------------------
+# There is no login: whatever reaches the port reads every message. Both of
+# these came from a page on the internet being able to reach 127.0.0.1.
+
+def _rows() -> bytes:
+    return json.dumps([{"contact": "Alex", "sender": "Alex", "direction": "received",
+                        "timestamp": "2024-01-01T10:00:00", "text": "hi"}]).encode()
+
+
+def _import(client, **headers):
+    return client.post("/api/import", files={"file": ("m.json", _rows())},
+                       data={"self_name": "Sam", "fmt": "json"}, headers=headers)
+
+
+def test_a_host_header_we_do_not_serve_is_refused(client):
+    """DNS rebinding: a name the attacker owns, pointed at this machine, is a
+    same-origin request from the browser's point of view, so CORS never runs.
+    The only thing that separates it from the real front end is the Host."""
+    r = client.get("/api/messages", headers={"host": "attacker.example"})
+    assert r.status_code == 400 and "host" in r.json()["detail"]
+    assert client.delete("/api/messages", headers={"host": "attacker.example"}).status_code == 400
+    # and the names it is actually reached by, with or without a port, still work
+    for host in ("localhost", "127.0.0.1", "127.0.0.1:8765", "[::1]:8765"):
+        assert client.get("/api/status", headers={"host": host}).status_code == 200, host
+
+
+def test_another_name_is_served_only_when_it_is_asked_for(tmp_path):
+    with TestClient(create_app(tmp_path / "named.db", use_llm=False, allowed_hosts=["stats.lan"]),
+                    base_url="http://stats.lan") as c:
+        assert c.get("/api/status").status_code == 200
+        assert c.get("/api/status", headers={"host": "attacker.example"}).status_code == 400
+    with TestClient(create_app(tmp_path / "any.db", use_llm=False, allowed_hosts=["*"]),
+                    base_url="http://whatever.example") as c:
+        assert c.get("/api/status").status_code == 200
+
+
+def test_the_cli_only_serves_loopback_unless_told_otherwise(tmp_path, monkeypatch):
+    import uvicorn
+
+    from randostats import cli
+
+    served = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: served.update(app=app, **kw))
+
+    cli.main(["--db", str(tmp_path / "cli.db"), "serve"])
+    with TestClient(served["app"], base_url="http://stats.lan") as c:
+        assert c.get("/api/status").status_code == 400
+
+    cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--allow-host", "stats.lan"])
+    with TestClient(served["app"], base_url="http://stats.lan") as c:
+        assert c.get("/api/status").status_code == 200
+
+
+def test_a_cross_site_page_cannot_import_or_delete_anything(client):
+    """multipart/form-data is a CORS-safelisted content type, so a plain form
+    on any page reaches /api/import with no preflight to stop it."""
+    assert _import(client, **{"sec-fetch-site": "cross-site"}).status_code == 403
+    # a browser that sends no Sec-Fetch-Site still names the origin
+    assert _import(client, origin="http://evil.example").status_code == 403
+    assert client.delete("/api/messages", headers={"sec-fetch-site": "cross-site"}).status_code == 403
+    assert client.post("/api/counterpoint/packs", json={"voice": "victorian"},
+                       headers={"origin": "http://evil.example"}).status_code == 403
+    assert client.get("/api/status").json()["messages"] == 0, "nothing was allowed in"
+
+    # the front end's own request, from the page this app serves, still works
+    ok = _import(client, origin="http://localhost", **{"sec-fetch-site": "same-origin"})
+    assert ok.status_code == 200, ok.text
+    assert client.get("/api/status").json()["messages"] == 1
+
+
+def test_a_refused_request_still_carries_the_security_headers(client):
+    r = _import(client, **{"sec-fetch-site": "cross-site"})
+    assert r.status_code == 403
+    assert "script-src 'self'" in r.headers["content-security-policy"]
