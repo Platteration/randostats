@@ -2,6 +2,19 @@
 
 Two independent reviewers read every first-party file in this repository; a third then re-read each security or bug claim against the code and tried to refute it. Only claims that survived that check are listed as findings; the ones that did not are recorded at the end so they are not re-raised.
 
+## Status — what has been fixed
+
+These findings are now fixed on `claude/repo-review-security-baiyud`, each with a regression test:
+
+- **SEC-1**
+- **SEC-2**
+- **BUG-1**
+- **MISS-1**
+
+The rest of this document is the review as written, and the fixed items are left in place so the reasoning behind each change stays with it.
+
+Repository hardening applied here as well: every GitHub Action is pinned to a commit rather than a floating tag, each workflow declares a least-privilege `permissions` block, and a Dependabot config, a licence and a security policy are in place.
+
 ## Summary
 
 randostats is a local-only Python 3 app (FastAPI + SQLite + a hand-drawn SVG front end with no build step) that imports message exports from eight sources, computes people/timing/spelling/tone/Wrapped statistics, and runs a 'counterpoint engine' that answers any statistic in an argument with a sourced, equally-sized, unrelated one, optionally rephrased by Claude. It is unusually mature for a side project: 17 commits, four of them review-driven fix rounds, 100+ focused tests including a regex walk that fails on XSS regressions, timestamp normalisation pinned across all parsers, cache invalidation tests, zip-bomb caps, and a CLAUDE.md that records real bugs. The headline problems are release hygiene rather than code: the package-data glob omits counterpoint/packs and counterpoint/voices so any non-editable install cannot start, there is no lockfile, LICENSE, Dependabot, lint, type-check or browser test, and the CI matrix stops at Python 3.12 with unpinned actions and no permissions block. The Anthropic integration is current (claude-opus-5, server-side fallbacks, structured parse) but calls the API with the SDK's 10-minute default timeout inside a request. Product-wise the biggest gaps are contact merging across sources, selective deletion/import history, a global date filter, and reply-time distributions; code-wise the 265-line create_app closure with import-time side effects, the security-critical esc() buried 700 lines down in app.js, and the untested iMessage parser are the items to fix first.
