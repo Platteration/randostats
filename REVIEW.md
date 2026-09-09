@@ -30,22 +30,22 @@ randostats is a single-user FastAPI/uvicorn server bound to 127.0.0.1:8765 by de
 |---|---|---|---|---|---|---|
 | SEC-1 | Medium | security | No Host-header validation: DNS rebinding lets a web page read (and delete) the entire message database | `randostats/api.py:56` | trivial | confirmed |
 | SEC-2 | Medium | security | CSRF on the multipart import endpoint: any website can inject messages and overwrite your name | `randostats/api.py:128` | small | confirmed |
-| SEC-3 | Medium | security | XML entity-expansion guard is bypassed by a UTF-16 document (billion laughs still reachable) | `randostats/parsers/smsbackup.py:31` | trivial | confirmed |
 | BUG-1 | Medium | bug | Fact packs and voices are not packaged: a non-editable install (`pip install .`/wheel) crashes at startup | `pyproject.toml:28` | trivial | confirmed |
-| MISS-1 | Medium | security | One Claude API call per distinct claim, with no cap on how many claims a request may contain | `randostats/api.py:265` | trivial | found by second reviewer |
-| MISS-2 | Medium | security | The zip member-count cap is applied after zipfile has already materialised the whole central directory, and the auto-detect path has no cap at all | `randostats/parsers/archive.py:44` | small | found by second reviewer |
+| MISS-1 | Medium | security | POST /api/counterpoint is quadratic in the number of claims and fans out one paid Claude call per claim, with no length cap | `randostats/counterpoint/engine.py:143` | small | found by second reviewer |
+| SEC-3 | Low | security | XML entity-expansion guard is bypassed by a UTF-16 document (billion laughs still reachable) | `randostats/parsers/smsbackup.py:31` | trivial | confirmed, severity lowered |
 | SEC-4 | Low | security | Binding to a non-loopback interface exposes the whole database and the Anthropic credential to the network with no auth | `randostats/cli.py:19` | small | confirmed |
 | SEC-5 | Low | privacy | "Listen" streams microphone audio to the browser vendor's cloud, contradicting the local-only promise and without disclosure | `randostats/static/app.js:803` | trivial | confirmed |
 | SEC-6 | Low | security | XSS regression test only inspects the line that contains the sink, so most multi-line templates are never checked | `tests/test_security.py:64` | small | confirmed |
 | BUG-2 | Low | bug | create_app() runs at import time, so `serve --db X` still creates ./data/randostats.db and builds everything twice | `randostats/api.py:321` | trivial | confirmed |
+| BUG-3 | Low | bug | /api/stats/conversations accepts inf/nan for gap_hours: inf returns a 500, nan silently produces wrong numbers | `randostats/api.py:209` | trivial | confirmed |
+| BUG-4 | Low | reliability | remember() can raise KeyError when an import clears the cache between store and return | `randostats/api.py:95` | trivial | confirmed |
 | CI-1 | Low | ci-cd | GitHub Actions are tag-pinned rather than SHA-pinned and the workflow has no permissions block | `.github/workflows/tests.yml:21` | trivial | confirmed |
 | SUP-1 | Low | supply-chain | No lockfile or constraints, unpinned dependency floors, no Dependabot, and no LICENSE/SECURITY.md | `pyproject.toml:6` | small | confirmed |
-| MISS-3 | Low | security | Quadratic backtracking in the claim regexes turns a crafted counterpoint request into an indefinite hang | `randostats/counterpoint/engine.py:94` | trivial | found by second reviewer |
-| MISS-4 | Low | bug | `randostats serve` silently ignores RANDOSTATS_LLM, contradicting the documented behaviour | `randostats/cli.py:39` | trivial | found by second reviewer |
-| MISS-5 | Low | bug | Format detection runs on the event loop, so a large or hostile upload stalls every other request | `randostats/api.py:142` | trivial | found by second reviewer |
+| MISS-2 | Low | security | WhatsApp import burns ~15 s of CPU per megabyte of crafted text (48 strptime attempts per unparseable line) | `randostats/parsers/whatsapp.py:61` | small | found by second reviewer |
+| MISS-3 | Low | security | The upload size cap is only checked after the entire body has been received and spooled to disk | `randostats/api.py:131` | trivial | found by second reviewer |
+| MISS-4 | Low | security | Archive caps are generous enough to be a memory bomb, and the auto-detect path applies none of them | `randostats/parsers/archive.py:14` | trivial | found by second reviewer |
+| MISS-5 | Low | bug | Speller memoisation caches are unbounded and live for the process lifetime | `randostats/stats.py:275` | trivial | found by second reviewer |
 | SEC-7 | Info | security | Claim text is interpolated into the Claude prompt without delimiting, so a spoken or typed instruction can steer the punchline | `randostats/counterpoint/llm.py:108` | trivial | confirmed |
-| BUG-3 | Info | bug | /api/stats/conversations accepts inf/nan for gap_hours: inf returns a 500, nan silently produces wrong numbers | `randostats/api.py:209` | trivial | confirmed, severity lowered |
-| BUG-4 | Info | reliability | remember() can raise KeyError when an import clears the cache between store and return | `randostats/api.py:95` | trivial | confirmed, severity lowered |
 
 ### SEC-1 · No Host-header validation: DNS rebinding lets a web page read (and delete) the entire message database
 
@@ -65,7 +65,7 @@ api.py:56-62:
 api.py:197-206: @app.get("/api/messages") ... returns stats.search(...) with full message text
 ```
 
-**Recommendation.** TrustedHostMiddleware is right, but note Starlette compares `headers.get("host", "").split(":")[0]`, so the literal string "[::1]" never matches an IPv6 Host header (`[::1]:8765` splits to "["). Use allowed_hosts=["127.0.0.1", "localhost"] plus args.host when it is not loopback, and pair it with the Sec-Fetch-Site/Origin rejection from SEC-2 so both the rebinding and the CSRF path close with one middleware.
+**Recommendation.** Add Starlette's TrustedHostMiddleware so only the loopback names are served: `from fastapi.middleware.trustedhost import TrustedHostMiddleware; app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])`, extending the list with the value of --host when it is not loopback. Optionally also reject requests whose Sec-Fetch-Site header is `cross-site`.
 
 ### SEC-2 · CSRF on the multipart import endpoint: any website can inject messages and overwrite your name
 
@@ -84,24 +84,6 @@ api.py:162: store.set_setting("self_name", self_name)
 ```
 
 **Recommendation.** Reject cross-site requests on every mutating route: in the existing middleware, for non-GET requests return 403 when `request.headers.get("sec-fetch-site") == "cross-site"` or when an Origin header is present and its host is not the request's own host. Alternatively require a custom header (e.g. `X-Randostats: 1`) on all fetch() calls in app.js and on the import FormData request; a custom header forces a preflight, which the missing CORS policy then denies.
-
-### SEC-3 · XML entity-expansion guard is bypassed by a UTF-16 document (billion laughs still reachable)
-
-**Severity:** Medium · **Category:** security · **Effort:** trivial · **Where:** `randostats/parsers/smsbackup.py:31`
-
-The SMS importer refuses files containing the bytes `<!ENTITY` and then hands the raw bytes to xml.etree, which expands internal entities without limit. expat auto-detects UTF-16 from a byte-order mark, so an export encoded as UTF-16 contains no `<!ENTITY` byte sequence yet its entity declarations are honoured. Verified locally: for a UTF-16 document with nested entities the guard reports False and ET.fromstring expands the body to the full length. A classic billion-laughs payload (a few hundred bytes) therefore exhausts memory and kills the server. Auto-detection does not recognise UTF-16, but the format can be forced with fmt=smsbackup, including from a cross-site form (SEC-2).
-
-Evidence:
-
-```
-smsbackup.py:31-33:
-    if b"<!ENTITY" in data:
-        raise ValueError("this XML declares entities, which this importer will not expand")
-    root = ET.fromstring(data)
-Local check: data = doc.encode("utf-16") -> (b"<!ENTITY" in data) == False; ET.fromstring(data) expanded &b; to 100 chars.
-```
-
-**Recommendation.** Parse with defusedxml, which rejects entity declarations regardless of encoding: add `defusedxml>=0.7` to dependencies and use `from defusedxml.ElementTree import fromstring` (it raises EntitiesForbidden; map that to the existing ValueError). If avoiding a dependency, build an `xml.parsers.expat` parser with `EntityDeclHandler` that raises, or decode the document with the encoding expat detects before running the byte check.
 
 ### BUG-1 · Fact packs and voices are not packaged: a non-editable install (`pip install .`/wheel) crashes at startup
 
@@ -122,54 +104,39 @@ api.py:67: return CounterpointEngine(packs=enabled, voice=store.get_setting("voi
 
 **Recommendation.** Change the entry to `randostats = ["static/*", "counterpoint/*.json", "counterpoint/packs/*.json", "counterpoint/voices/*.json"]` (or `counterpoint/**/*.json` with setuptools>=62), and add a CI job that runs `pip install .` (non-editable) followed by `randostats counter "70% of people"` so the packaged artifact is exercised.
 
-### MISS-1 · One Claude API call per distinct claim, with no cap on how many claims a request may contain
+### MISS-1 · POST /api/counterpoint is quadratic in the number of claims and fans out one paid Claude call per claim, with no length cap
 
-**Severity:** Medium · **Category:** security · **Effort:** trivial · **Where:** `randostats/api.py:265`
+**Severity:** Medium · **Category:** security · **Effort:** small · **Where:** `randostats/counterpoint/engine.py:143`
 
-CounterRequest.text is unbounded and /api/counterpoint groups the engine's results by claim key, then fans every group out to llm.sharpen through a ThreadPoolExecutor. per_claim is clamped to 5 but the *number of claims* is not clamped at all, so a single POST whose body contains many distinct percentages produces one Claude request per distinct claim. On the owner's key, with claude-opus-5 and max_tokens=1024 each, that turns one request into hundreds. This is a footgun even for the owner (paste a long article into the Counterpoint box), and it is the highest-value thing to reach through the DNS-rebinding path in SEC-1 or a --host 0.0.0.0 binding (SEC-4): unlike /api/import it costs the victim real money.
-
-Evidence:
-
-```
-randostats/api.py:258-275:
-    @app.post("/api/counterpoint")
-    def counterpoint(req: CounterRequest):
-        ...
-        results = cp["engine"].respond(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
-        ...
-            groups = list(by_claim.items())
-            with ThreadPoolExecutor(max_workers=min(4, len(groups))) as pool:
-                sharpened = pool.map(lambda g: (g[0], llm.sharpen(g[1][0].claim.raw, g[1])), groups)
-randostats/api.py:46-50: class CounterRequest(BaseModel): text: str   (no max_length)
-My measurement: a 20,000-word text of ordinary words with scattered number words yields 608 counterpoints across 304 distinct claim keys -> 304 Claude calls for one HTTP request.
-```
-
-**Recommendation.** Bound both ends: declare `text: str = Field(max_length=4000)` on CounterRequest, and cap the fan-out with `groups = list(by_claim.items())[:8]` (returning the rule-based punchline for the rest, which the renderer already handles when payload.llm has no entry for a key). Optionally add a simple per-process rate limit on the llm path.
-
-### MISS-2 · The zip member-count cap is applied after zipfile has already materialised the whole central directory, and the auto-detect path has no cap at all
-
-**Severity:** Medium · **Category:** security · **Effort:** small · **Where:** `randostats/parsers/archive.py:44`
-
-json_files() opens the archive and only then checks len(infos) > MAX_MEMBERS - but zipfile.ZipFile.__init__ reads the entire central directory and builds every ZipInfo before infolist() returns, so the memory is already spent when the guard runs. archive.names(), which detect_format calls for every uploaded zip on the auto path, has no cap whatsoever. A minimal empty zip member costs about 86 bytes on disk, so a file at the default 256 MB upload ceiling can declare ~3.1 million members; I measured ~580 bytes of Python objects per member, i.e. roughly 1.8 GB of RAM to open it, before a single byte of member data is read. The auditor listed this cap as a strength ('capped on member count ... before any member is read, so a compressed bomb fails fast'), which is only true for the decompression bomb, not for the header bomb. Reachable by a cross-site multipart POST (SEC-2) as well as by a file the user imports.
+`CounterRequest.text` has no maximum length and `extract_claims` has no ceiling on how many claims it returns. Its overlap check `taken()` rescans every span recorded so far for every regex match, so the cost grows with the square of the number of claims: I measured 0.61 s for 1,000 claims, 2.5 s for 2,000, 10.5 s for 4,000 and 45.3 s for 8,000 (111 KB of text), i.e. roughly an hour of pegged CPU for a megabyte. Because the handler is a sync `def`, that runs in the threadpool holding the GIL and the whole local server stalls. With `--llm` it is also a money bug: api.py:265-274 groups the results by claim key and calls `llm.sharpen` once per group through `pool.map`, so a text with N distinct claims issues N Claude requests at the owner's expense with no cap. This is reachable by accident (pasting a long article into the Counterpoint box) as well as by a DNS-rebinding page (SEC-1) or any LAN client when `--host` is widened, and it is the one place where an outside request can spend the owner's API budget.
 
 Evidence:
 
 ```
-randostats/parsers/archive.py:44-51:
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        infos = zf.infolist()
-        if len(infos) > MAX_MEMBERS:
-            raise ArchiveTooLarge(...)
-randostats/parsers/archive.py:27-35 (no cap at all):
-    def names(data: bytes) -> list[str]:
-        ...
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            return zf.namelist()
-randostats/parsers/__init__.py:60-61: if archive.is_zip(data): inside = " ".join(archive.names(data)).lower()
-My measurement (python3.11): 50,000 empty members = 4,277,802 bytes on disk (85.6 B/entry); tracemalloc peak while opening = 29.0 MB (580.7 B/entry). Extrapolated to a 256 MB upload: ~3.14 M entries, ~1.8 GB RAM.
+randostats/counterpoint/engine.py:143-153 `def taken(m: re.Match) -> bool:\n        return any(not (m.end() <= s or m.start() >= e) for s, e in spans)` with `spans.append(...)` in `add`; engine.py:284-301 `def respond(self, text: str, per_claim: int = 2, seen=None)` loops over every claim with no limit; randostats/api.py:46-50 `class CounterRequest(BaseModel):\n    text: str` (no max_length); randostats/api.py:265-274 `groups = list(by_claim.items())\n            with ThreadPoolExecutor(max_workers=min(4, len(groups))) as pool:\n                sharpened = pool.map(lambda g: (g[0], llm.sharpen(...)), groups)`. Measured: extract_claims on 1000/2000/4000/8000 claims -> 0.611/2.47/10.53/45.35 s.
 ```
 
-**Recommendation.** Reject the archive from its header before constructing the ZipInfo list: scan for the End Of Central Directory record and read its 'total number of entries' field (and the central-directory size) against MAX_MEMBERS / a byte budget, then open the ZipFile only if it passes. Apply the same pre-check inside names() so the auto-detect path is guarded too, and lower MAX_MEMBERS (50,000 is already far above any real Telegram or Meta export).
+**Recommendation.** Bound the input and the fan-out: `text: str = Field(max_length=4000)` on CounterRequest, stop `extract_claims` after N claims (say 20) and cap the number of LLM groups per request (say 4). Independently, make the overlap check O(1) per match with a `bytearray(len(text))` coverage map instead of the linear `spans` scan, which removes the quadratic term for legitimate long inputs.
+
+### SEC-3 · XML entity-expansion guard is bypassed by a UTF-16 document (billion laughs still reachable)
+
+**Severity:** Low (reported as medium, adjusted after review) · **Category:** security · **Effort:** trivial · **Where:** `randostats/parsers/smsbackup.py:31`
+
+The SMS importer refuses files containing the bytes `<!ENTITY` and then hands the raw bytes to xml.etree, which expands internal entities without limit. expat auto-detects UTF-16 from a byte-order mark, so an export encoded as UTF-16 contains no `<!ENTITY` byte sequence yet its entity declarations are honoured. Verified locally: for a UTF-16 document with nested entities the guard reports False and ET.fromstring expands the body to the full length. A classic billion-laughs payload (a few hundred bytes) therefore exhausts memory and kills the server. Auto-detection does not recognise UTF-16, but the format can be forced with fmt=smsbackup, including from a cross-site form (SEC-2).
+
+Evidence:
+
+```
+smsbackup.py:31-33:
+    if b"<!ENTITY" in data:
+        raise ValueError("this XML declares entities, which this importer will not expand")
+    root = ET.fromstring(data)
+Local check: data = doc.encode("utf-16") -> (b"<!ENTITY" in data) == False; ET.fromstring(data) expanded &b; to 100 chars.
+```
+
+**Recommendation.** defusedxml is still the correct fix, but a dependency-free one is cheaper here and matches the file's existing style: decode with the encoding expat detects before the byte check (or simply reject data starting with a UTF-16 BOM, `data[:2] in (b"\\xff\\xfe", b"\\xfe\\xff")`, since no SMS Backup & Restore export is UTF-16), and note in the comment that modern expat already caps amplification, so this guard is belt-and-braces.
+
+*Reviewer note (confirmed, severity lowered):* The bypass itself is real and I reproduced it: for a UTF-16-encoded document the byte guard does not fire and ElementTree still honours the entity declarations. But the claimed impact — 'a classic billion-laughs payload (a few hundred bytes) therefore exhausts memory and kills the server' — is false on any libexpat >= 2.4.0 (2022), which enables billion-laughs amplification protection by default (max amplification 100x, 8 MiB activation threshold). On this machine (expat 2.6.1, Python 3.11) the nested-entity payload aborts with `ParseError: limit on input amplification factor (from DTD and entities) breached` at 15 MB peak RSS, and api.py:157-158 turns that into a clean HTTP 400. What is left is (a) a real defence-in-depth hole on old runtimes (expat < 2.4, e.g. Ubuntu 20.04 era, still possible under the declared requires-python >= 3.10) and (b) a 100x expansion ceiling, so a multi-megabyte crafted file can still be inflated — which is a weaker version of the much cheaper DoS in MISS-2. That is a low, not a medium.
 
 ### SEC-4 · Binding to a non-loopback interface exposes the whole database and the Anthropic credential to the network with no auth
 
@@ -243,6 +210,46 @@ api.py:81: threading.Thread(target=speller, name="speller-warmup", daemon=True).
 
 **Recommendation.** Remove the module-level instance. If a module-level ASGI target is wanted for `uvicorn randostats.api:app`, use a factory (`uvicorn randostats.api:create_app --factory`) or guard it behind `if os.environ.get("RANDOSTATS_ASGI_APP")`. Alternatively make the speller warm-up and Store creation lazy in a startup event so an import has no side effects.
 
+### BUG-3 · /api/stats/conversations accepts inf/nan for gap_hours: inf returns a 500, nan silently produces wrong numbers
+
+**Severity:** Low · **Category:** bug · **Effort:** trivial · **Where:** `randostats/api.py:209`
+
+gap_hours is an unconstrained float. Pydantic accepts the strings `inf` and `nan`. `timedelta(hours=inf)` raises OverflowError, which surfaces as an unhandled 500 (the front end shows a generic failure banner). With `nan` every comparison is False, so each contact collapses into a single conversation and the summary tiles are wrong without any error. Negative or zero values are also accepted and make every message its own conversation. The UI only offers five fixed values, so this is reached by hand-edited URLs, but the endpoint is part of the public surface and the fix is one annotation.
+
+Evidence:
+
+```
+api.py:209: def conversations(gap_hours: float = 6.0, limit: int | None = None):
+stats.py:381: gap = timedelta(hours=gap_hours)
+stats.py:385: if current and m.timestamp - current[-1].timestamp > gap:
+```
+
+**Recommendation.** `gap_hours: float = Query(6.0, gt=0, le=24 * 365)` is enough on its own — nan fails `gt=0` and inf fails `le=...` — so allow_inf_nan is belt-and-braces rather than the fix. Apply the same bound to `limit` on /api/stats/conversations, which is currently used unvalidated as a slice index.
+
+### BUG-4 · remember() can raise KeyError when an import clears the cache between store and return
+
+**Severity:** Low · **Category:** reliability · **Effort:** trivial · **Where:** `randostats/api.py:95`
+
+Stats endpoints are sync handlers served from the threadpool. remember() writes `derived[key] = compute()` and then reads `derived[key]` back; bump() (called after every import and on DELETE) and the size guard call `derived.clear()` from another thread. If the clear lands between the write and the read, the request fails with a KeyError-driven 500. The window is tiny, but the front end refreshes every view right after an import, which is exactly when bump() runs.
+
+Evidence:
+
+```
+api.py:95-104:
+    def remember(name: str, compute, **params):
+        key = (state["version"], name, tuple(sorted(params.items())))
+        if key not in derived:
+            if len(derived) > 256:
+                derived.clear()
+            derived[key] = compute()
+        return derived[key]
+    def bump():
+        state["version"] += 1
+        derived.clear()
+```
+
+**Recommendation.** Return the computed value directly: `value = derived.get(key); if value is None: value = compute(); derived[key] = value; return value` (or guard the whole block with a threading.Lock shared with bump()).
+
 ### CI-1 · GitHub Actions are tag-pinned rather than SHA-pinned and the workflow has no permissions block
 
 **Severity:** Low · **Category:** ci-cd · **Effort:** trivial · **Where:** `.github/workflows/tests.yml:21`
@@ -276,66 +283,61 @@ Repo facts: no lockfile, Dependabot absent, LICENSE absent, SECURITY.md absent.
 
 **Recommendation.** Generate a pinned set with `uv lock` or `pip-compile --extra dev --extra llm -o requirements.lock`, install in CI with `pip install -c requirements.lock -e .[dev]`, run `pip-audit -r requirements.lock` as a CI step, add `.github/dependabot.yml` for pip and github-actions, and add a LICENSE (e.g. MIT) and a two-line SECURITY.md.
 
-### MISS-3 · Quadratic backtracking in the claim regexes turns a crafted counterpoint request into an indefinite hang
+### MISS-2 · WhatsApp import burns ~15 s of CPU per megabyte of crafted text (48 strptime attempts per unparseable line)
 
-**Severity:** Low · **Category:** security · **Effort:** trivial · **Where:** `randostats/counterpoint/engine.py:94`
+**Severity:** Low · **Category:** security · **Effort:** small · **Where:** `randostats/parsers/whatsapp.py:61`
 
-_NUM allows a repeated number-word group, and each pattern then requires a suffix (`%`, `percent`, `in`, `times ...`) that a long run of number words never supplies, so the engine backtracks the star from every starting offset. Cost is cleanly quadratic in the number of consecutive number words: I measured 0.026 s at 200 words, 0.103 s at 400, 0.421 s at 800, 1.63 s at 1600, and a 20,000-word run did not finish in 110 s. Because CounterRequest.text has no length limit and /api/counterpoint is a sync handler, each such request pins one Starlette threadpool worker; a handful exhausts the pool and the whole app stops answering. Ordinary prose is not affected (20,000 random English words parse in 1.7 s), so this is a deliberate-input hazard, reachable from the LAN under --host 0.0.0.0 (SEC-4) or from a rebound origin (SEC-1), which can send application/json.
-
-Evidence:
-
-```
-randostats/counterpoint/engine.py:41,94:
-    _NUMBER_WORD = r"(?:hundred|" + "|".join(list(_TENS) + [...]) + r")"
-    _NUM = r"(?:\d+(?:[.,]\d+)?|" + _NUMBER_WORD + r"(?:[\s-]+" + _NUMBER_WORD + r")*)"
-randostats/counterpoint/engine.py:99: ("percent", re.compile(rf"\b(?P<num>{_NUM})\s*(?:%|percent\b|per cent\b|pct\b)", re.IGNORECASE)),
-randostats/api.py:263: results = cp["engine"].respond(req.text, ...)   (sync def handler, threadpool)
-My measurement of extract_claims(" ".join(["one"]*n)): n=200 0.026s, 400 0.103s, 800 0.421s, 1600 1.63s (4x per doubling); n=20000 exceeded a 110 s timeout.
-```
-
-**Recommendation.** Cap the input first (`text: str = Field(max_length=4000)` on CounterRequest, and truncate in CounterpointEngine.respond so the CLI is covered too). Optionally bound the repetition in _NUM to something a real claim needs, e.g. `(?:[\s-]+NUMBER_WORD){0,3}` instead of `*`.
-
-### MISS-4 · `randostats serve` silently ignores RANDOSTATS_LLM, contradicting the documented behaviour
-
-**Severity:** Low · **Category:** bug · **Effort:** trivial · **Where:** `randostats/cli.py:39`
-
-create_app only consults RANDOSTATS_LLM when use_llm is None, but the CLI always passes a bool: `--llm` is a store_true flag, so omitting it passes False rather than None and the env-var branch never runs. `RANDOSTATS_LLM=1 randostats serve` therefore starts with Claude off and no message saying why, while `uvicorn randostats.api:app` (which reaches the module-level create_app() with use_llm=None) honours it. Both llm.py's module docstring and api.py's own comment describe RANDOSTATS_LLM=1 as an equivalent to --llm, so the documented contract is broken on the only path the README tells users to run.
+`_parse_timestamp` tries all 8 date formats against all 6 time formats for every line that matches `_LINE`, and only returns early on success. A line that matches the regex but carries an impossible date (`99/99/9999, 99:99 - a: x`) therefore costs 48 failed `datetime.strptime` calls, and nothing caches or short-circuits after the first line proves the shape is unparseable. I measured 385 microseconds per line, i.e. 15.4 seconds of CPU per megabyte of such input; at the 256 MB upload cap that is over an hour of a pegged core, with the parse running in the threadpool holding the GIL so the whole server is unresponsive. The file needs no special format field to get there — `detect_format` picks whatsapp for any `.txt` name or any file whose first lines match `_LINE` — and POST /api/import is the one mutating endpoint a cross-site page can reach (SEC-2), so this is the cheapest drive-by DoS in the app, cheaper than the XML route in SEC-3. The parser also materialises a Match object per line for the whole file before doing any work.
 
 Evidence:
 
 ```
-randostats/cli.py:21: s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
-randostats/cli.py:39: uvicorn.run(create_app(args.db, use_llm=args.llm), host=args.host, port=args.port)
-randostats/api.py:71-73:
-    if use_llm is None:
-        use_llm = os.environ.get("RANDOSTATS_LLM", "").lower() in ("1", "true", "yes", "on")
-    llm_on = bool(use_llm and llm.available())
-randostats/counterpoint/llm.py:4-6: "...and the app was started with ``--llm`` (or ``RANDOSTATS_LLM=1``), this module asks Claude..."
+randostats/parsers/whatsapp.py:61-74 `for dfmt in candidates:\n        for tfmt in _TIME_FORMATS:\n            try:\n                return datetime.strptime(f"{date} {time}", f"{dfmt} {tfmt}")\n            except ValueError:\n                continue`; whatsapp.py:94 `matches = [(_LINE.match(_clean_line(line)), line) for line in lines]`; randostats/parsers/__init__.py:83-86 auto-detect falls through to whatsapp for `.txt`. Measured: 20,000 identical lines of `99/99/9999, 99:99 - a: x` (500 KB) parsed in 7.70 s = 385 us/line = 15.4 s per MB.
 ```
 
-**Recommendation.** Give the flag a tri-state default so the env var still applies: `s.add_argument("--llm", action="store_true", default=None)` and pass `use_llm=args.llm` unchanged, so None reaches create_app when the flag is absent.
+**Recommendation.** Resolve the format pair once per file: on the first line that parses, remember `(dfmt, tfmt)` and try it first for the rest; and wrap `_parse_timestamp` in an `lru_cache` keyed on `(date, time, day_first)` so repeated identical stamps cost nothing. A cheap belt-and-braces addition is to give up on a file after, say, 1,000 consecutive unparseable timestamped lines — it is not a WhatsApp export.
 
-### MISS-5 · Format detection runs on the event loop, so a large or hostile upload stalls every other request
+### MISS-3 · The upload size cap is only checked after the entire body has been received and spooled to disk
 
-**Severity:** Low · **Category:** bug · **Effort:** trivial · **Where:** `randostats/api.py:142`
+**Severity:** Low · **Category:** security · **Effort:** trivial · **Where:** `randostats/api.py:131`
 
-import_file deliberately pushes parsing into a threadpool with the comment that CPU work 'off the event loop ... does not stall every other request', but the auto-detect step that runs immediately before it is not moved off the loop. detect_format opens the whole zip central directory (archive.names, see MISS-2), runs the WhatsApp line regex over the head of the file, and decodes an 8 KB probe - all synchronously inside the async handler. For a 256 MB zip that is seconds of blocking plus the ~1.8 GB allocation described in MISS-2, during which the server answers nothing, including the front end's own status poll. It also means the header-bomb work happens twice, once here and once inside json_files.
+Both size checks live inside the handler, and FastAPI only calls the handler after `request.form()` has parsed the whole multipart body — Starlette buffers each file part into a SpooledTemporaryFile that spills to a real file in the temp directory past 1 MB. So `MAX_UPLOAD_BYTES` does not bound what a caller can make the server write: a cross-site POST (SEC-2) or a LAN client (SEC-4) can stream gigabytes into the temp filesystem and only then receive a 413, and the file is removed only when the request object is torn down. `data = await file.read()` then loads the accepted file fully into RAM a second time, so the accepted worst case is also 2x256 MB before parsing even starts. The audit listed this cap as a strength; it protects the parser, not the machine.
 
 Evidence:
 
 ```
-randostats/api.py:142-154:
-        if fmt == "auto":
-            fmt = parsers.detect_format(file.filename or "", data) or ""
-            ...
-        try:
-            # Parsing and inserting a large export takes seconds of CPU; off
-            # the event loop it does not stall every other request.
-            msgs = await run_in_threadpool(read_and_store)
-randostats/parsers/__init__.py:57-73: detect_format ... archive.names(data) / whatsapp.looks_like_whatsapp(data[:4096]) / _sniff_json(stripped)
+randostats/api.py:131-141 `# The multipart header usually declares the size; refuse before reading.\n        declared = getattr(file, "size", None)\n        if declared is not None and declared > MAX_UPLOAD_BYTES:\n            raise HTTPException(413, ...)\n        data = await file.read()` — `file.size` is populated by the multipart parser, which has already consumed the request body before the handler runs; nothing checks Content-Length in the middleware at randostats/api.py:56-62.
 ```
 
-**Recommendation.** Move the detection into the same threadpool hop as the parse: fold `if fmt == "auto": fmt = parsers.detect_format(...)` into read_and_store (raising a ValueError the existing except-clause turns into a 400), so only one blocking call crosses the event loop.
+**Recommendation.** Reject early in the existing security middleware: for POST /api/import, read `request.headers.get("content-length")` and return 413 before the body is parsed when it exceeds MAX_UPLOAD_BYTES (plus a small multipart overhead). Keep the in-handler checks as the fallback for chunked requests.
+
+### MISS-4 · Archive caps are generous enough to be a memory bomb, and the auto-detect path applies none of them
+
+**Severity:** Low · **Category:** security · **Effort:** trivial · **Where:** `randostats/parsers/archive.py:14`
+
+Two gaps in the zip guards the audit called a strength. First, MAX_TOTAL_BYTES is 512 MB of declared uncompressed content — twice the 256 MB upload cap — and repetitive JSON deflates about 290x (measured), so a ~2 MB upload reaches the ceiling legitimately; parsing that text costs about 4x its size in Python objects (measured 15.6 MB of JSON -> 63 MB of objects), and telegram.parse materialises every document in one list before iterating, so a small crafted archive can drive the process to several GB. Second, the caps live in `json_files`, but `detect_format` calls `archive.names()` on the raw upload first, and that opens the zip and builds a ZipInfo for every central-directory entry with no MAX_MEMBERS check at all: 100,000 empty members cost 0.44 s and ~60 MB RSS, so a 256 MB upload of ~2.8 M members costs roughly 12 s and 1.7 GB before the member cap is ever consulted.
+
+Evidence:
+
+```
+randostats/parsers/archive.py:14-16 `MAX_MEMBERS = 50_000\nMAX_TOTAL_BYTES = 512 * 1024 * 1024\nMAX_MEMBER_BYTES = 64 * 1024 * 1024`; archive.py:27-35 `def names(data): ... with zipfile.ZipFile(io.BytesIO(data)) as zf:\n            return zf.namelist()` (no caps) called from randostats/parsers/__init__.py:60-61 `if archive.is_zip(data):\n        inside = " ".join(archive.names(data)).lower()`; randostats/parsers/telegram.py:69-72 `payloads = [doc for _, doc in archive.json_files(data, contains="result.json")]`. Measured: deflate ratio 289.9x on repetitive Telegram-shaped JSON; json.loads of 15.6 MB -> 63.2 MB of traced objects (4.05x); archive.names() on a 100k-member zip -> 0.44 s, 59.6 MB RSS.
+```
+
+**Recommendation.** Lower MAX_TOTAL_BYTES to at most MAX_UPLOAD_BYTES (it can never legitimately exceed it by 2x), apply the member-count cap inside `names()` as well (or have `detect_format` use a capped helper), and let telegram.parse consume the `json_files` generator one document at a time instead of building a list.
+
+### MISS-5 · Speller memoisation caches are unbounded and live for the process lifetime
+
+**Severity:** Low · **Category:** bug · **Effort:** trivial · **Where:** `randostats/stats.py:275`
+
+`Speller._cache` and `Speller._suggest_cache` are plain dicts with one entry per distinct word ever spell-checked, and the Speller is an lru_cache(maxsize=1) singleton held for the life of the server, so nothing ever evicts them. The neighbouring `_is_noise` memo was deliberately capped at 200,000 entries, which shows the author is aware of the pattern; these two were missed. An import full of distinct alphabetic junk (the noise filter only rejects words shorter than 3 characters, pure repetitions, stretched laughter and non-alphabetic tokens) grows the dict by one entry per distinct word the first time the Spelling tab is opened, and the memory is never returned. It is a slow leak rather than an attack, but it is unbounded and trivially fixed.
+
+Evidence:
+
+```
+randostats/stats.py:275-284 `self._cache: dict[str, bool] = {}\n        self._suggest_cache: dict[str, str | None] = {}` ... `bad = lw not in self.checker and lw.removesuffix("'s") not in self.checker\n        self._cache[lw] = bad`; compare randostats/stats.py:312 `@lru_cache(maxsize=200_000)\ndef _is_noise(word: str) -> bool:`; randostats/api.py:75-77 `@lru_cache(maxsize=1)\n    def speller() -> stats.Speller:` keeps the instance for the process.
+```
+
+**Recommendation.** Make both methods module-level functions wrapped in `functools.lru_cache(maxsize=200_000)` (matching `_is_noise`), or clear the dicts when they exceed a bound, so a pathological import cannot grow the resident set without limit.
 
 ### SEC-7 · Claim text is interpolated into the Claude prompt without delimiting, so a spoken or typed instruction can steer the punchline
 
@@ -350,51 +352,7 @@ llm.py:108: prompt = f"Claim made in the argument: \"{claim_text}\"\n\nVerified 
 llm.py:131-133: valid_ids = {cp.fact.id for cp in counterpoints}; if parsed.fact_id not in valid_ids: parsed.fact_id = counterpoints[0].fact.id
 ```
 
-**Recommendation.** As written, plus cap claim_text explicitly (e.g. claim_text[:400]) - engine.py:151 bounds the raw span by the next clause boundary, not by length, so a run-on spoken sentence already sends an arbitrarily long string.
-
-### BUG-3 · /api/stats/conversations accepts inf/nan for gap_hours: inf returns a 500, nan silently produces wrong numbers
-
-**Severity:** Info (reported as low, adjusted after review) · **Category:** bug · **Effort:** trivial · **Where:** `randostats/api.py:209`
-
-gap_hours is an unconstrained float. Pydantic accepts the strings `inf` and `nan`. `timedelta(hours=inf)` raises OverflowError, which surfaces as an unhandled 500 (the front end shows a generic failure banner). With `nan` every comparison is False, so each contact collapses into a single conversation and the summary tiles are wrong without any error. Negative or zero values are also accepted and make every message its own conversation. The UI only offers five fixed values, so this is reached by hand-edited URLs, but the endpoint is part of the public surface and the fix is one annotation.
-
-Evidence:
-
-```
-api.py:209: def conversations(gap_hours: float = 6.0, limit: int | None = None):
-stats.py:381: gap = timedelta(hours=gap_hours)
-stats.py:385: if current and m.timestamp - current[-1].timestamp > gap:
-```
-
-**Recommendation.** The annotation is still the right fix - `gap_hours: float = Query(6.0, gt=0, le=24 * 365, allow_inf_nan=False)` - but describe it as turning two 500s into a 422 plus rejecting non-positive gaps, not as fixing silent miscalculation.
-
-*Reviewer note (confirmed, severity lowered):* Half of this is wrong. The `inf` half holds: gap_hours is an unconstrained float, stats.py:381 does timedelta(hours=gap_hours), and timedelta(hours=float('inf')) raises OverflowError -> unhandled 500. But the `nan` half does not: I ran it, and timedelta(hours=float('nan')) raises `ValueError: cannot convert float NaN to integer` at the same line, so nan produces the identical 500, never 'silently wrong numbers'. The only genuinely silent case is a zero or negative gap, which makes every message its own conversation - and the UI only ever sends one of five fixed positive values (index.html:43), so this is a hand-edited-URL 500 on a loopback single-user API. That is info, not low.
-
-### BUG-4 · remember() can raise KeyError when an import clears the cache between store and return
-
-**Severity:** Info (reported as low, adjusted after review) · **Category:** reliability · **Effort:** trivial · **Where:** `randostats/api.py:95`
-
-Stats endpoints are sync handlers served from the threadpool. remember() writes `derived[key] = compute()` and then reads `derived[key]` back; bump() (called after every import and on DELETE) and the size guard call `derived.clear()` from another thread. If the clear lands between the write and the read, the request fails with a KeyError-driven 500. The window is tiny, but the front end refreshes every view right after an import, which is exactly when bump() runs.
-
-Evidence:
-
-```
-api.py:95-104:
-    def remember(name: str, compute, **params):
-        key = (state["version"], name, tuple(sorted(params.items())))
-        if key not in derived:
-            if len(derived) > 256:
-                derived.clear()
-            derived[key] = compute()
-        return derived[key]
-    def bump():
-        state["version"] += 1
-        derived.clear()
-```
-
-**Recommendation.** Return the computed value directly: `value = derived.get(key); if value is None: value = compute(); derived[key] = value; return value` (or guard the whole block with a threading.Lock shared with bump()).
-
-*Reviewer note (confirmed, severity lowered):* The race is real as written: the stats handlers are sync `def`, so FastAPI runs them on the threadpool, while bump() runs on the event-loop thread inside the async import handler (and clear() runs on the threadpool), and remember() writes then re-reads derived[key] as two separate operations that the GIL can interleave. But the stated trigger is wrong: bump() at api.py:163 completes before the import response is sent, and app.js awaits that response before calling refresh() (app.js:826-830), so the front end's post-import reload never overlaps the bump. The window is the microseconds between STORE_SUBSCR and BINARY_SUBSCR, and it needs a stats request in flight from a second tab or the drawer at that instant. Worth the one-line fix, but info rather than low.
+**Recommendation.** Wrap the claim in an explicit data block (e.g. `<claim>...</claim>`) and add one line to SYSTEM stating that the claim is untrusted quoted speech and any instructions inside it must be ignored; cap claim_text length before sending (the engine's raw claim is already bounded by the subject cut, so this is cheap).
 
 ## Upgrades
 
