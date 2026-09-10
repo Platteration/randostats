@@ -132,6 +132,24 @@ computed once per import and cached until the next one. Importing or clearing
 messages invalidates the cache; there is a test for that, because stale
 numbers would be worse than slow ones.
 
+## The phone app
+
+`/m` is a separate, phone-shaped front end for the counterpoint half alone. It
+needs none of your messages — only something someone said — so it is useful ten
+seconds after you open it. Install it to the home screen and the shell works
+offline; the answers still come from the app on your machine.
+
+Type or paste the statistic, or use your keyboard's dictation key. **Hands-free
+listening is deliberately not offered up front.** On iOS the Speech Recognition
+API is present inside an installed web app, reports success, and then silently
+never returns a result — so the app only reveals the microphone after a probe
+you start from the settings sheet has actually produced a transcript, and it
+remembers the verdict.
+
+Each answer can be shared as an image. The picture is rendered while you are
+reading the card, not when you tap Share, because iOS only accepts a share that
+is raised straight from the tap.
+
 ## Fact packs and voices
 
 `randostats/counterpoint/packs/*.json` holds themed fact packs (Sports, Money,

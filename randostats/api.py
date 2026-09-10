@@ -114,6 +114,22 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
     def index():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/m", include_in_schema=False)
+    def mobile():
+        """The phone app: the counterpoint half, without the archive."""
+        return FileResponse(STATIC / "m.html")
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    def manifest():
+        return FileResponse(STATIC / "m.webmanifest", media_type="application/manifest+json")
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker():
+        """Served from the root deliberately: a worker's scope defaults to its
+        own directory, so one under /static could never control /m."""
+        return FileResponse(STATIC / "m-sw.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache"})
+
     # -- import ---------------------------------------------------------------
     @app.get("/api/status")
     def status():

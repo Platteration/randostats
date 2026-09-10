@@ -28,4 +28,7 @@ jobs:
       - name: Run tests
         run: pytest -q
       - name: Check the front end parses
-        run: node --check randostats/static/app.js
+        run: |
+          node --check randostats/static/app.js
+          node --check randostats/static/m.js
+          node --check randostats/static/m-sw.js

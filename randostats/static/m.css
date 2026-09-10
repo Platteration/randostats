@@ -1,0 +1,186 @@
+/* Counterpoint, phone edition. Dark first: this gets used in pubs and kitchens,
+   usually one-handed, usually in an argument. Everything you need is within a
+   thumb's reach of the bottom of the screen. */
+
+:root {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --raised: #232322;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --line: rgba(255, 255, 255, 0.12);
+  --accent: #3987e5;
+  --warm: #d95926;
+  --radius: 16px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --raised: #f2f1ec;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --line: rgba(11, 11, 11, 0.12);
+    --accent: #2a78d6;
+    --warm: #eb6834;
+  }
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  font: 16px/1.5 var(--font);
+  color: var(--ink);
+  background: var(--page);
+  overscroll-behavior-y: contain;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- top bar ---------- */
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(10px + var(--safe-t)) 16px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.logo {
+  display: inline-grid; place-items: center; width: 26px; height: 26px;
+  border-radius: 7px; background: var(--accent); color: #fff; font-weight: 700;
+}
+
+/* ---------- the stage ---------- */
+main {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
+}
+.intro { padding: 24px 4px; }
+.lead { font-size: 22px; font-weight: 600; margin: 0 0 8px; }
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.examples { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.cards { display: grid; gap: 14px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warm);
+  border-radius: var(--radius);
+  padding: 18px;
+  animation: rise .28s cubic-bezier(.2, .8, .2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.card .said { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.card .said b { display: block; margin-top: 4px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.card .punch { font-size: 20px; line-height: 1.35; margin: 12px 0; }
+.card .fact { color: var(--ink-2); font-size: 15px; }
+.card .src { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.card .gap { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 14px; }
+.card .gap b { color: var(--ink); }
+.card .actions { display: flex; gap: 8px; margin-top: 16px; }
+.card.empty-state { border-left-color: var(--muted); }
+
+/* ---------- compose bar, pinned in thumb reach ---------- */
+.compose {
+  padding: 10px 16px calc(12px + var(--safe-b));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  display: grid;
+  gap: 8px;
+}
+.deck-nav { display: flex; align-items: center; justify-content: center; gap: 16px; }
+.row { display: flex; gap: 8px; align-items: flex-end; }
+
+textarea {
+  flex: 1;
+  font: inherit;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  resize: none;
+  max-height: 30vh;
+}
+textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  /* 48px: a thumb, not a mouse pointer */
+  min-height: 48px;
+  padding: 0 18px;
+  cursor: pointer;
+}
+button.primary { flex: 1; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.ghost { background: transparent; }
+button.icon { min-width: 48px; padding: 0; font-size: 18px; }
+button.mic.listening { background: #d03b3b; border-color: #d03b3b; color: #fff; }
+button[disabled] { opacity: .5; }
+
+.chip {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  color: var(--ink-2);
+  background: transparent;
+}
+.chip.on { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.chip.locked { opacity: .45; }
+
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.muted { color: var(--muted); font-size: 13px; }
+
+/* ---------- settings sheet ---------- */
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 19; }
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  max-height: 82vh; overflow-y: auto;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-radius: 20px 20px 0 0;
+  padding-bottom: calc(20px + var(--safe-b));
+  animation: slide-up .25s cubic-bezier(.2, .8, .2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+@keyframes slide-up { from { transform: translateY(100%); } to { transform: none; } }
+.sheet-head {
+  position: sticky; top: 0; background: var(--surface);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px; border-bottom: 1px solid var(--line);
+}
+.sheet-head h2 { margin: 0; font-size: 17px; }
+.sheet-body { padding: 4px 16px 0; }
+.sheet-body h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* A phone held sideways, or a small tablet. */
+@media (min-width: 700px) {
+  main, .compose { max-width: 640px; margin-inline: auto; width: 100%; }
+  .bar { justify-content: center; gap: 24px; }
+}

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Counterpoint">
+<title>Counterpoint</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<!-- iOS ignores manifest icons and wants this one explicitly. -->
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="stylesheet" href="/static/m.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand"><span class="logo">%</span> Counterpoint</div>
+  <button id="settings-open" class="icon" aria-label="Fact packs and voice">⚙</button>
+</header>
+
+<main id="stage">
+  <div id="intro" class="intro">
+    <p class="lead">Someone just quoted a statistic at you.</p>
+    <p class="sub">Type it below. You'll get one that's just as true, just as sourced, and completely unrelated.</p>
+    <div class="examples" id="examples">
+      <button class="chip">70% of people drink beer</button>
+      <button class="chip">1 in 5 adults have a tattoo</button>
+      <button class="chip">most people agree</button>
+      <button class="chip">3 times more likely</button>
+    </div>
+  </div>
+  <div id="cards" class="cards" aria-live="polite"></div>
+</main>
+
+<footer class="compose">
+  <div id="deck-nav" class="deck-nav" hidden>
+    <button id="prev" class="ghost" aria-label="Previous answer">‹</button>
+    <span id="deck-count" class="muted"></span>
+    <button id="next" class="ghost" aria-label="Next answer">›</button>
+  </div>
+  <div class="row">
+    <textarea id="claim" rows="1" enterkeyhint="go" autocapitalize="sentences"
+      placeholder="Paste or say the statistic…" aria-label="The statistic you heard"></textarea>
+    <button id="mic" class="icon mic" hidden aria-label="Hands-free listening">🎙</button>
+  </div>
+  <div class="row">
+    <button id="go" class="primary">Counter it</button>
+    <button id="random" class="ghost">Surprise me</button>
+  </div>
+  <p id="hint" class="hint" hidden></p>
+</footer>
+
+<div id="sheet-scrim" class="scrim" hidden></div>
+<section id="sheet" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+  <div class="sheet-head">
+    <h2 id="sheet-title">Facts and voice</h2>
+    <button id="settings-close" class="icon" aria-label="Close">✕</button>
+  </div>
+  <div class="sheet-body">
+    <h3>Fact packs</h3>
+    <div id="packs" class="chips"></div>
+    <p id="fact-count" class="muted"></p>
+    <h3>Voice</h3>
+    <div id="voices" class="chips"></div>
+    <div id="speech-offer" hidden>
+      <h3>Hands-free</h3>
+      <p class="muted">Your keyboard's dictation key already works and needs no permission.
+        Some browsers claim to support hands-free listening and then do nothing, so this has to be tried to be known.</p>
+      <button id="speech-try" class="chip">Try hands-free</button>
+    </div>
+  </div>
+</section>
+
+<div id="live" class="sr-only" role="status" aria-live="polite"></div>
+<script src="/static/m.js"></script>
+</body>
+</html>

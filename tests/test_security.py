@@ -14,7 +14,10 @@ from fastapi.testclient import TestClient
 from randostats.api import create_app
 from randostats.parsers import archive
 
-APP_JS = Path(__file__).resolve().parent.parent / "randostats" / "static" / "app.js"
+STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
+APP_JS = STATIC / "app.js"
+# Every front end that puts somebody else's words on screen, not just the first.
+FRONT_ENDS = (APP_JS, STATIC / "m.js")
 
 
 @pytest.fixture
@@ -53,18 +56,27 @@ ROW_VALUE = re.compile(r"\b[a-z]{1,4}(\.[a-zA-Z_]\w*|\[[^\]]+\])")
 LAUNDERED = ("esc(", "dot(", "fmt(", "pct(", "mins(", "compact(", ".toFixed(", "Math.round(", "hueOf(")
 
 
-def test_frontend_escapes_every_imported_value_it_renders():
+@pytest.mark.parametrize("front_end", FRONT_ENDS, ids=lambda p: p.name)
+def test_frontend_escapes_every_imported_value_it_renders(front_end):
     """A bare imported value interpolated into HTML is how the XSS got in once.
 
-    Contact names, senders and message text all come from files other people
-    wrote, so every one of them must pass through esc() (or a numeric
-    formatter) before it reaches innerHTML or a tooltip.
+    Contact names, senders, message text and fact statements all come from
+    somewhere we do not control, so every one of them must pass through esc()
+    (or a numeric formatter) before it reaches innerHTML or a tooltip. Each
+    front end duplicates esc(), so each is checked.
     """
     offenders = []
-    for number, line in enumerate(APP_JS.read_text().splitlines(), start=1):
+    lines = front_end.read_text().splitlines()
+    for number, line in enumerate(lines, start=1):
         if not any(sink in line for sink in HTML_SINKS):
             continue
-        for expression in re.findall(r"\$\{([^{}]*)\}", line):
+        # A card template runs over many lines. Checking only the line the sink
+        # sits on would miss every interpolation below it, which is most of them.
+        block, index = line, number
+        while block.count("`") % 2 and index < len(lines):
+            block += "\n" + lines[index]
+            index += 1
+        for expression in re.findall(r"\$\{([^{}]*)\}", block):
             if ROW_VALUE.search(expression) and not any(safe in expression for safe in LAUNDERED):
                 offenders.append(f"line {number}: ${{{expression}}}")
     assert not offenders, ("data reaching HTML without esc() or a numeric formatter:\n  "

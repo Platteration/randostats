@@ -47,6 +47,23 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
   checks in `is_media_placeholder` was three times *slower*. The comment in
   the code says so, so nobody tries it again.
 
+## The phone app
+
+`/m` is a second front end (`static/m.{html,css,js}`, `m-sw.js`, `m.webmanifest`)
+sharing only the counterpoint API. Deliberately standalone rather than importing
+from `app.js`, which is one closed IIFE. Consequences worth knowing:
+
+- `tests/test_security.py` parameterises its escaping lint over **both** front
+  ends. Each duplicates `esc()`; neither may skip it.
+- That lint follows multi-line template literals. It used to check only the line
+  the sink was on, which let an unescaped value in a card template pass.
+- The service worker is served from `/sw.js`, not `/static/`, because scope
+  defaults to the script's own directory. It must never cache `/api/` —
+  `counterpoint/packs` reflects database state.
+- `navigator.share` must be called with no `await` in front of it, so the share
+  PNG is rendered when the card is shown. There is a test for that.
+- Icons are committed PNGs; regenerate with `python samples/make_icons.py`.
+
 ## Verifying a change
 
 `pytest -q` covers parsers, stats, engine, API, security and timestamps. For
