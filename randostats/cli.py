@@ -49,9 +49,13 @@ def main(argv: list[str] | None = None) -> int:
         hosts = [*LOOPBACK_HOSTS, *args.allow_host]
         if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
             hosts.append(args.host)
-        if args.host not in (*LOOPBACK_HOSTS, ""):
+        # "" is a bind-all, exactly as the line above says: uvicorn hands it
+        # straight to bind(), and bind(("", port)) is every interface. Filing
+        # it with the loopback names here let the widest bind of the three be
+        # the one that said nothing.
+        if args.host not in LOOPBACK_HOSTS:
             # There is no password on any of this. Say so before it is served.
-            print(f"warning: serving on {args.host}, which is not just this machine.\n"
+            print(f"warning: serving on {args.host or '0.0.0.0'}, which is not just this machine.\n"
                   "         Nothing here asks for a password: anyone who can reach this port can read,\n"
                   "         search and export every message you have imported, and delete the lot.\n"
                   "         Bind 127.0.0.1 (the default) unless you mean it.", file=sys.stderr)

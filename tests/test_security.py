@@ -67,38 +67,134 @@ LITERAL_CHOICE = re.compile(r"""\?\s*(['"][^'"]*['"])\s*:\s*(['"][^'"]*['"])\s*$
 INTERPOLATION = re.compile(r"\$\{([^{}]*)\}")
 
 
-def _template_literals(text: str):
-    """(offset, source) for every template literal in the file.
+# A "/" opens a regex only where a value cannot already have ended; after
+# one of these words it can. (Without this, `.replace(/[&<>"\']/g, ...)` in
+# esc() reads as a division and leaves a quote hanging.)
+BEFORE_A_REGEX = {"return", "typeof", "instanceof", "in", "of", "new", "delete",
+                  "void", "case", "do", "else", "yield", "await"}
 
-    Backticks are paired from the outside in, stepping over escapes and over
-    nested ``${...}`` (which may hold templates of their own). Quoted strings
-    and comments are deliberately *not* skipped: doing that needs a real
-    lexer, and getting it wrong (a regex literal holding a quote is enough)
-    silently drops templates from the scan, which is the failure this guard
-    is here to avoid.
+
+def _starts_a_regex(text: str, i: int) -> bool:
+    end = i
+    while end > 0 and text[end - 1] in " \t\r\n":
+        end -= 1
+    if end == 0:
+        return True
+    if not (text[end - 1].isalnum() or text[end - 1] in "_$"):
+        return text[end - 1] not in ")]}'\"`"
+    start = end
+    while start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_$"):
+        start -= 1
+    return text[start:end] in BEFORE_A_REGEX
+
+
+def _closing_quote(text: str, i: int) -> int:
+    """One past the end of the string opened at ``i``, or the line it ran off."""
+    quote, j = text[i], i + 1
+    while j < len(text):
+        if text[j] == "\\":
+            j += 2
+        elif text[j] == quote:
+            return j + 1
+        elif text[j] == "\n":
+            return j  # an unterminated string is a syntax error, not the rest of the file
+        else:
+            j += 1
+    return len(text)
+
+
+def _closing_slash(text: str, i: int) -> int:
+    """One past the end of the regex literal opened at ``i``."""
+    j, in_class = i + 1, False
+    while j < len(text):
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "\n":
+            return j
+        if ch == "[":
+            in_class = True
+        elif ch == "]":
+            in_class = False
+        elif ch == "/" and not in_class:
+            return j + 1
+        j += 1
+    return len(text)
+
+
+def _scan(text: str) -> tuple[list[tuple[int, str]], list[int], list[int]]:
+    """Walk the file once. Returns (literals, quoted, unterminated).
+
+    ``literals`` is (offset, source) for every template literal at any depth,
+    ``quoted`` the offset of every backtick that is only a character - one
+    inside a string, a comment or a regex literal - and ``unterminated`` the
+    offset of any template whose end was never found.
+
+    The first version of this paired backticks blindly and skipped nothing,
+    on the argument that telling strings and comments apart needs a real
+    lexer and getting it wrong silently shrinks the scan. Both halves of that
+    are true, and the conclusion was still wrong: a single backtick in a
+    comment or a string desynced the pairing and dropped every template after
+    it just as silently, offenders and all. So this is the lexer, small as it
+    is, and ``quoted`` and ``unterminated`` are what it has to show for
+    itself - a test below reads them back and fails if the scan ever covers
+    less of app.js than it does now.
     """
+    literals: list[tuple[int, str]] = []
+    quoted: list[int] = []
+    stack = ["code"]  # "code" | "brace" | "subst" | "template"
+    opens: list[int] = []
     i, n = 0, len(text)
+
+    def skip(end: int) -> int:
+        quoted.extend(k for k in range(i, min(end, n)) if text[k] == "`")
+        return end
+
     while i < n:
         ch = text[i]
-        if ch == "`":
-            j, depth = i + 1, 0
-            while j < n:
-                if text[j] == "\\":
-                    j += 2
-                    continue
-                if text[j] == "`" and depth == 0:
-                    break
-                if text[j:j + 2] == "${":
-                    depth += 1
-                    j += 2
-                    continue
-                if text[j] == "}" and depth:
-                    depth -= 1
-                j += 1
-            yield i, text[i:j + 1]
-            i = j + 1
+        if stack[-1] == "template":
+            if ch == "\\":
+                i += 2
+            elif ch == "`":
+                start = opens.pop()
+                stack.pop()
+                literals.append((start, text[start:i + 1]))
+                i += 1
+            elif text[i:i + 2] == "${":
+                stack.append("subst")
+                i += 2
+            else:
+                i += 1
+            continue
+        if text[i:i + 2] == "//":
+            end = text.find("\n", i)
+            i = skip(n if end < 0 else end)
+        elif text[i:i + 2] == "/*":
+            end = text.find("*/", i + 2)
+            i = skip(n if end < 0 else end + 2)
+        elif ch in "'\"":
+            i = skip(_closing_quote(text, i))
+        elif ch == "/" and _starts_a_regex(text, i):
+            i = skip(_closing_slash(text, i))
+        elif ch == "`":
+            opens.append(i)
+            stack.append("template")
+            i += 1
+        elif ch == "{":
+            stack.append("brace")
+            i += 1
+        elif ch == "}" and len(stack) > 1:
+            stack.pop()  # the brace it was opened by, or the ${...} it closes
+            i += 1
         else:
             i += 1
+    return literals, quoted, opens
+
+
+def _template_literals(text: str) -> list[tuple[int, str]]:
+    """(offset, source) for every template literal in the file."""
+    return _scan(text)[0]
 
 
 def _unlaundered(expression: str) -> bool:
@@ -166,6 +262,56 @@ def test_the_escaping_scan_reaches_inside_multiline_templates():
     assert unescaped_values('el.innerHTML = `<b>${esc(r.contact)}</b>${r.is_you ? " (you)" : ""}`;\n') == []
 
 
+BACKTICK_HIDING_PLACES = [
+    ("a comment", "// a backtick ` in a comment\n"),
+    ("an apostrophe", "// what it's for: a backtick `\n"),
+    ("a string", 'const tip = "press ` to search";\n'),
+    ("a regex", "const fence = /`+/g;\n"),
+    ("a block comment", "/* a backtick ` here */\n"),
+]
+
+
+@pytest.mark.parametrize("where,prelude", BACKTICK_HIDING_PLACES, ids=[w for w, _ in BACKTICK_HIDING_PLACES])
+def test_a_backtick_that_is_not_a_delimiter_does_not_shrink_the_scan(where, prelude):
+    """One stray backtick used to switch the whole scan off, quietly.
+
+    Backticks were paired from the outside in with nothing skipped, so a
+    backtick in a comment or a string opened a pseudo-template that ran to
+    the next real one and every literal after it was read inside out. On the
+    sample below the offender simply stopped being reported; on app.js the
+    markup-bearing templates found dropped from 53 to 23 with no failure
+    anywhere. That is the same silent-coverage failure the line-scoped scan
+    was replaced for, so it has to be the scan that copes, not the file.
+    """
+    table = ('$("#peaks").innerHTML = `<table><tbody>` +\n'
+             '  rows.map(r => `<tr><td>${esc(r.contact)}</td><td>${r.sender}</td></tr>`).join("");\n')
+    assert unescaped_values(table) == ["line 2: ${r.sender}"]
+    assert prelude.count("`") == 1, f"one backtick, hiding in {where}"
+    assert unescaped_values(prelude + table) == ["line 3: ${r.sender}"]
+
+
+def test_the_escaping_scan_still_covers_the_whole_of_app_js():
+    """Coverage, not just cleanliness.
+
+    The scan above passing means nothing if the scan has quietly stopped
+    reading most of the file, and every way it can go wrong ends in reading
+    less. So check its own accounting against a fact it does not produce: the
+    number of backticks in the file. Every one of them has to be either a
+    delimiter of a literal the scan found, or a character the scan decided
+    was inside a string, a comment or a regex - never simply lost.
+    """
+    text = APP_JS.read_text()
+    literals, quoted, unterminated = _scan(text)
+    assert not unterminated, f"template literals whose end was never found, at {unterminated}"
+    assert 2 * len(literals) + len(quoted) == text.count("`"), "backticks the scan cannot account for"
+    assert not quoted, ("app.js has always spelt its backticks as template delimiters and nothing "
+                        "else. One that is not is fine, but check the scan still reads past it "
+                        f"before allowing it here: {quoted}")
+    markup = [body for _, body in literals if MARKUP.search(body)]
+    assert len(markup) >= 50, (f"only {len(markup)} of {len(literals)} templates in app.js were read as "
+                               "markup; the scan has shrunk, or the app has")
+
+
 def test_oversized_upload_is_refused(client, monkeypatch):
     import randostats.api as api
 
@@ -221,6 +367,67 @@ def test_a_huge_index_is_refused_before_the_archive_is_opened(monkeypatch):
         archive.names(data)
     with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
         list(archive.json_files(data))
+
+
+def _lie_about_the_member_count(data: bytes, count: int) -> bytes:
+    """Rewrite both entry-count fields in the end-of-central-directory record.
+
+    Two bytes each, and nothing reads them back: CPython's zipfile walks the
+    central directory by size and never consults the count at all.
+    """
+    end = data.rfind(b"PK\x05\x06")
+    packed = count.to_bytes(2, "little")
+    return data[:end + 8] + packed + packed + data[end + 12:]
+
+
+def test_a_lie_about_the_member_count_does_not_buy_the_walk(monkeypatch):
+    """The count is the uploader's word, so the cap cannot rest on it.
+
+    zipfile reads *size_cd* bytes of central directory and steps through them
+    46 bytes at a time; the count in the end record is never read. Two edited
+    bytes therefore used to restore the whole cost the cap was added to stop.
+    Bound the walk on the size, which cannot be shrunk without shrinking the
+    walk, and check the real number again once the index exists.
+    """
+    honest = _zip({f"messages/inbox/a{i}/message_1.json": "{}" for i in range(60)})
+    liar = _lie_about_the_member_count(honest, 1)
+    assert archive.declared_members(liar) == 1, "the archive now claims to hold one file"
+    assert len(zipfile.ZipFile(io.BytesIO(liar)).namelist()) == 60, "and zipfile enumerates all sixty"
+
+    monkeypatch.setattr(archive, "MAX_MEMBERS", 5)
+    with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
+        archive.names(liar)
+    with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
+        list(archive.json_files(liar))
+
+
+def test_the_index_cap_really_does_refuse_before_the_archive_is_opened(monkeypatch):
+    """Asserted, rather than claimed in a docstring: nothing may open it."""
+    liar = _lie_about_the_member_count(
+        _zip({f"messages/inbox/a{i}/message_1.json": "{}" for i in range(60)}), 1)
+
+    def refuse_to_open(*args, **kwargs):
+        raise AssertionError("the archive was opened before the cap was checked")
+
+    monkeypatch.setattr(archive, "MAX_MEMBERS", 5)
+    monkeypatch.setattr(zipfile, "ZipFile", refuse_to_open)
+    with pytest.raises(archive.ArchiveTooLarge, match="index describes up to"):
+        archive.names(liar)
+
+
+def test_an_unknown_member_count_is_not_an_unlimited_one(monkeypatch):
+    """65,535 members park 0xFFFF in the end record, which is also Zip64's
+    "look in the other record" sentinel. With no other record the count is
+    simply unknown - and an unknown count used to mean no cap at all, so an
+    archive of exactly 65,535 members walked through untouched."""
+    data = _lie_about_the_member_count(_zip({f"n{i}.txt": "{}" for i in range(20)}), 0xFFFF)
+    assert archive.declared_members(data) is None, "the count says nothing"
+
+    monkeypatch.setattr(archive, "MAX_MEMBERS", 5)
+    assert archive.index_bytes(data) <= archive.MAX_MEMBERS * archive.BYTES_PER_MEMBER, \
+        "small enough that only the count after opening can catch it"
+    with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
+        archive.names(data)
 
 
 def test_an_archive_with_too_many_members_is_a_413_even_when_sniffed(client, monkeypatch):
@@ -460,6 +667,31 @@ def test_serving_beyond_loopback_says_what_that_costs(tmp_path, monkeypatch, cap
     cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0"])
     warning = capsys.readouterr().err
     assert "warning" in warning and "password" in warning and "delete" in warning
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", ""])
+def test_every_bind_all_says_it_is_a_bind_all(tmp_path, monkeypatch, capsys, host):
+    """An empty host is the third spelling of "every interface".
+
+    It is not a fourth loopback name.
+
+    uvicorn passes --host through to bind(), and bind(("", port)) is
+    INADDR_ANY, so `serve --host ""` served the unauthenticated API on the LAN
+    and printed nothing. The line that builds the Host allow-list already
+    counts "" as a bind rather than a name; the line that decides the warning
+    filed it with 127.0.0.1 and the two disagreed.
+    """
+    import uvicorn
+
+    from randostats import cli
+
+    bound = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: bound.update(kw))
+    cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host])
+    assert bound["host"] == host, "whatever was asked for is what is bound"
+    warning = capsys.readouterr().err
+    assert "warning" in warning and "password" in warning and "delete" in warning
+    assert "serving on , " not in warning, "an empty host still has to read as something"
 
 
 def test_the_listen_button_says_where_the_audio_goes():

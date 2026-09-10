@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Iterable
+from itertools import chain, islice
+from typing import Iterable, Iterator
 
 from ..models import Message
 
@@ -53,6 +54,22 @@ def _clean_line(raw: str) -> str:
 # Counting only *consecutive* failures would not help: one parseable line
 # every thousand resets it and the cost comes straight back.
 MAX_UNPARSEABLE = 1000
+
+# How much of the file is read before the first message comes out. One export
+# is one conversation written in one date format, so which way round the dates
+# are and who speaks in it are both settled within the opening lines; reading
+# the whole file to answer them is what stopped the give-up above from
+# bounding anything at all. It built a Match object per line for the whole
+# upload - 8 s and 1.2 GB for 64 MB of it - before looking at a single one,
+# and the give-up cannot fire until that is done. A group whose third
+# participant says nothing in the first five thousand lines is filed under
+# the name of the second, which is the price of the bound.
+HEAD_LINES = 5000
+
+# What str.splitlines() splits on. Splitting the whole file at once is a list
+# of millions of strings; this yields them one at a time instead, so a file
+# that is going to be refused is never fully materialised.
+_LINE_BREAK = re.compile("\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
 _DATE_FORMATS = (
     "%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%d/%m/%Y",
@@ -95,6 +112,16 @@ def _parse_timestamp(date: str, time: str, day_first: bool | None,
     return None, known
 
 
+def _iter_lines(text: str) -> Iterator[str]:
+    """``text.splitlines()``, one line at a time and without the list."""
+    start = 0
+    for brk in _LINE_BREAK.finditer(text):
+        yield text[start:brk.start()]
+        start = brk.end()
+    if start < len(text):
+        yield text[start:]
+
+
 def _guess_day_first(dates: list[str]) -> bool | None:
     """If any first field exceeds 12 the export is day-first; any second field >12 means month-first."""
     for d in dates:
@@ -111,26 +138,32 @@ def _guess_day_first(dates: list[str]) -> bool | None:
 
 def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[Message]:
     text = data.decode("utf-8-sig", errors="replace")
-    lines = text.splitlines()
-    matches = [(_LINE.match(_clean_line(line)), line) for line in lines]
-    day_first = _guess_day_first([m.group("date") for m, _ in matches if m][:500])
+    rest = _iter_lines(text)
+    head = list(islice(rest, HEAD_LINES))
+    opening = [m for m in (_LINE.match(_clean_line(line)) for line in head) if m]
+    day_first = _guess_day_first([m.group("date") for m in opening][:500])
 
     # The contact is whoever isn't the user; for a group, the export has no
     # name, so we fall back to the caller-provided name or a generic label.
-    senders: list[str] = []
-    for m, _ in matches:
-        if m and m.group("sender") not in senders:
-            senders.append(m.group("sender"))
+    # There are only three answers - nobody else, exactly one other, or more
+    # than one - so stop looking at two, and a file of nothing but distinct
+    # senders cannot make the roster itself expensive to build.
     self_key = _BIDI.sub("", self_name).strip().lower()
-    others = [s for s in senders if s.strip().lower() != self_key]
+    others: list[str] = []
+    for m in opening:
+        sender = m.group("sender")
+        if sender.strip().lower() != self_key and sender not in others:
+            others.append(sender)
+            if len(others) > 1:
+                break
     if contact is None:
         contact = others[0] if len(others) == 1 else ("Group chat" if others else self_name)
 
-    self_key = _BIDI.sub("", self_name).strip().lower()
     current: dict | None = None
     known: tuple[str, str] | None = None
     unparseable = 0
-    for m, raw in matches:
+    for raw in chain(head, rest):
+        m = _LINE.match(_clean_line(raw))
         if m:
             if current:
                 yield _finish(current, contact)
