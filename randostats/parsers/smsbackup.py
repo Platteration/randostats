@@ -25,9 +25,17 @@ def _ts(ms: str | None) -> datetime | None:
 
 
 def parse(data: bytes, self_name: str) -> Iterable[Message]:
-    # ElementTree expands internal entities without limit, so a few hundred
-    # bytes of nested declarations can fill memory. No real backup declares
-    # any, so refuse the file rather than parse it.
+    # ElementTree expands internal entities, so a few hundred bytes of nested
+    # declarations can inflate into a great deal of memory. (libexpat has
+    # capped the amplification factor since 2.4, but the runtime's copy may be
+    # older than that.) No real backup declares any, so refuse the file.
+    #
+    # The check is on bytes, and expat picks its encoding up from a
+    # byte-order mark: in UTF-16 a declaration holds no "<!ENTITY" bytes at
+    # all, so the guard used to miss it entirely. No export of this format is
+    # UTF-16 or UTF-32, so those are refused before the check that follows.
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff") or data[:4] == b"\x00\x00\xfe\xff":
+        raise ValueError("this XML is UTF-16 or UTF-32; re-export it as UTF-8")
     if b"<!ENTITY" in data:
         raise ValueError("this XML declares entities, which this importer will not expand")
     root = ET.fromstring(data)

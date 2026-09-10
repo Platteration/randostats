@@ -64,6 +64,7 @@ def test_detect_format():
     assert parsers.detect_format("WhatsApp Chat with Alex.txt", WA_US.encode()) == "whatsapp"
 
 
+import inspect
 import io
 import json as _json
 import zipfile
@@ -215,3 +216,60 @@ def test_a_byte_order_mark_does_not_hide_the_format():
     assert parsers.detect_format("result.json", b"\xef\xbb\xbf" + payload) == "telegram"
     csv = b"contact,sender,direction,timestamp,text\nA,A,received,2024-01-01T10:00:00,hi\n"
     assert parsers.detect_format("x.csv", b"\xef\xbb\xbf" + csv) == "csv"
+
+
+def test_whatsapp_gives_up_on_a_file_of_timestamps_it_cannot_read():
+    """Every line matching the shape and none of them carrying a readable date
+    used to cost forty-eight failed strptime calls a line, for the length of
+    the file: 23 seconds of CPU per megabyte of it."""
+    junk = ("99/99/9999, 99:99 - a: x\n" * (whatsapp.MAX_UNPARSEABLE + 5)).encode()
+    with pytest.raises(ValueError, match="not a WhatsApp export"):
+        list(whatsapp.parse(junk, "Sam"))
+    # one real line every so often must not reset the budget and buy more work
+    mixed = (("99/99/9999, 99:99 - a: x\n" * 100 + "1/2/24, 9:15 PM - Alex: hi\n")
+             * (whatsapp.MAX_UNPARSEABLE // 100 + 1)).encode()
+    with pytest.raises(ValueError, match="not a WhatsApp export"):
+        list(whatsapp.parse(mixed, "Sam"))
+
+
+def test_whatsapp_tolerates_the_odd_unreadable_line():
+    export = "99/99/9999, 99:99 - a: nonsense\n1/2/24, 9:15 PM - Alex: hey\n"
+    assert [m.text for m in whatsapp.parse(export.encode(), "Sam")] == ["hey"]
+
+
+def test_whatsapp_reuses_the_format_that_worked():
+    """One export is written in one format; finding it again per line was the
+    other half of the cost above."""
+    assert whatsapp._parse_timestamp("14/03/2024", "23:59", None) == (
+        datetime(2024, 3, 14, 23, 59), ("%d/%m/%Y", "%H:%M"))
+    known = ("%d/%m/%Y", "%H:%M")
+    assert whatsapp._parse_timestamp("15/03/2024", "00:01", None, known)[0] == datetime(2024, 3, 15, 0, 1)
+    # a line the remembered pair cannot read still gets the full search
+    assert whatsapp._parse_timestamp("2024-03-16", "00:02", None, known)[0] == datetime(2024, 3, 16, 0, 2)
+
+
+def test_smsbackup_refuses_a_utf16_document():
+    """The entity guard reads bytes, and expat picks its encoding off the byte
+    order mark: in UTF-16 a declaration carries no "<!ENTITY" bytes at all."""
+    doc = ('<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE smses [<!ENTITY a "aaaaaaaaaa">'
+           '<!ENTITY b "&a;&a;&a;&a;&a;">]><smses><sms address="1" date="1700000000000" '
+           'type="1" body="&b;"/></smses>')
+    utf16 = doc.encode("utf-16")
+    assert b"<!ENTITY" not in utf16  # which is why the old guard missed it
+    with pytest.raises(ValueError, match="UTF-16"):
+        list(smsbackup.parse(utf16, "Sam"))
+    assert b"<!ENTITY" in doc.encode("utf-8")  # and the byte guard still catches this one
+    with pytest.raises(ValueError, match="entities"):
+        list(smsbackup.parse(doc.encode("utf-8"), "Sam"))
+
+
+def test_telegram_reads_an_archive_one_document_at_a_time():
+    """Holding every document at once meant a small archive of large exports
+    was in memory twice: as parsed JSON and as the messages built from it."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(3):
+            zf.writestr(f"DataExport{i}/result.json", _json.dumps(TELEGRAM))
+    seen = list(telegram._payloads(buf.getvalue()))
+    assert len(seen) == 3 and all(isinstance(d, dict) for d in seen)
+    assert inspect.isgenerator(telegram._payloads(buf.getvalue()))

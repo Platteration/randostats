@@ -11,6 +11,13 @@ same magnitude that has nothing to do with it.
 Everything runs locally. Your messages go into a SQLite file on your machine
 and never leave it.
 
+Two things do leave, both opt-in and both named where they happen: the
+Counterpoint tab's **Listen** button uses your browser's speech recognition,
+which in Chrome and Edge means the audio is transcribed by the browser vendor
+rather than on your device, and starting with `--llm` sends the claim being
+answered to the optional service described further down this page. Neither one
+touches your imported messages.
+
 ## What it does
 
 | Tab | What you see |
@@ -21,7 +28,7 @@ and never leave it.
 | **Spelling** | Your most frequent misspellings with suggested corrections and an example, misspellings per 1,000 words, who you misspell things to, and (flipped) who misspells the most at you. Text-speak like "lol" and "gonna" is ignored, as are URLs and names. |
 | **Words & tone** | Most used words, emoji counts and favourites per person, and warm-minus-cold tone words by month and by person. Tone is a word count, not a mood reading: it cannot see sarcasm or "not great", and the app says so. |
 | **Wrapped** | The year on one 1080 × 1350 card: total messages, who you talk to most, busiest hour, reply times, after-midnight share, longest streak, your word, your emoji, your worst typo. Downloads as a 2× PNG. |
-| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari). Every claim like "70%", "seventy percent", "1 in 5", "three out of four", "most people", or "3 times more likely" gets one or more sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
+| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari; the audio is transcribed by the browser, which is a cloud service in Chrome and Edge). Every claim like "70%", "seventy percent", "1 in 5", "three out of four", "most people", or "3 times more likely" gets one or more sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
 | **Import** | WhatsApp exports, iMessage `chat.db`, Android "SMS Backup & Restore" XML, Telegram JSON, Instagram and Messenger downloads, Discord packages, or generic CSV/JSON. Zips are read in place, and the format is detected for you. |
 
 Every chart has a **Table** toggle and hover tooltips, and follows the viewer's

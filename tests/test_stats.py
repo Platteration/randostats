@@ -244,3 +244,17 @@ def test_one_unanswered_message_is_not_a_ghosting_habit():
     # nobody has enough history to judge
     thin = [dict(rows[0])]
     assert stats.conversation_summary(thin)["ghosted_by"] is None
+
+
+def test_the_spellers_memos_are_bounded(monkeypatch):
+    """One Speller lives for the life of the server, so a dict with an entry
+    per distinct word ever checked was memory that never came back."""
+    monkeypatch.setattr(stats, "MEMO_WORDS", 16)
+    speller = stats.Speller()
+    for i in range(200):
+        speller.is_misspelled(f"zzqx{i}")
+    assert speller._misspelled.cache_info().currsize <= 16
+    # bounded, and still answering the same way
+    assert speller.is_misspelled("definately") and not speller.is_misspelled("definitely")
+    assert speller.suggest("definately") == "definitely"
+    assert speller._suggestion.cache_info().maxsize == 16

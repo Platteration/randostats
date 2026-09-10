@@ -46,6 +46,14 @@ def _clean_line(raw: str) -> str:
     return _BIDI.sub("", raw).strip()
 
 
+# A line can match _LINE and still carry a date no format parses
+# ("99/99/9999, 99:99 - a: x"), and each of those costs a failed strptime for
+# every date and time format there is. A crafted file of nothing else used to
+# cost 23 seconds of CPU per megabyte, so stop reading one that never parses.
+# Counting only *consecutive* failures would not help: one parseable line
+# every thousand resets it and the cost comes straight back.
+MAX_UNPARSEABLE = 1000
+
 _DATE_FORMATS = (
     "%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%d/%m/%Y",
     "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d",
@@ -58,8 +66,21 @@ def looks_like_whatsapp(head: bytes) -> bool:
     return any(_LINE.match(_clean_line(line)) for line in text.splitlines()[:20])
 
 
-def _parse_timestamp(date: str, time: str, day_first: bool | None) -> datetime | None:
+def _parse_timestamp(date: str, time: str, day_first: bool | None,
+                     known: tuple[str, str] | None = None) -> tuple[datetime | None, tuple[str, str] | None]:
+    """The moment, and the pair of formats that read it.
+
+    One export is written in one format, so pass the pair that worked last
+    time back in as ``known`` and the rest of the file costs one attempt a
+    line instead of up to forty-eight.
+    """
     time = time.replace("a.m.", "AM").replace("p.m.", "PM").replace(" ", " ").strip()
+    stamp = f"{date} {time}"
+    if known is not None:
+        try:
+            return datetime.strptime(stamp, f"{known[0]} {known[1]}"), known
+        except ValueError:
+            pass
     candidates = list(_DATE_FORMATS)
     if day_first is True:
         candidates.sort(key=lambda f: 0 if f.startswith("%d") else 1)
@@ -68,10 +89,10 @@ def _parse_timestamp(date: str, time: str, day_first: bool | None) -> datetime |
     for dfmt in candidates:
         for tfmt in _TIME_FORMATS:
             try:
-                return datetime.strptime(f"{date} {time}", f"{dfmt} {tfmt}")
+                return datetime.strptime(stamp, f"{dfmt} {tfmt}"), (dfmt, tfmt)
             except ValueError:
                 continue
-    return None
+    return None, known
 
 
 def _guess_day_first(dates: list[str]) -> bool | None:
@@ -107,12 +128,18 @@ def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[M
 
     self_key = _BIDI.sub("", self_name).strip().lower()
     current: dict | None = None
+    known: tuple[str, str] | None = None
+    unparseable = 0
     for m, raw in matches:
         if m:
             if current:
                 yield _finish(current, contact)
-            ts = _parse_timestamp(m.group("date"), m.group("time"), day_first)
+            ts, known = _parse_timestamp(m.group("date"), m.group("time"), day_first, known)
             if ts is None:
+                unparseable += 1
+                if unparseable > MAX_UNPARSEABLE:
+                    raise ValueError(f"gave up after {MAX_UNPARSEABLE} lines whose timestamp no known "
+                                     "format could read; this is not a WhatsApp export")
                 current = None
                 continue
             sender = m.group("sender").strip()

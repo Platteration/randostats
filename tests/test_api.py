@@ -226,3 +226,70 @@ def test_counterpoint_refuses_more_text_than_a_claim_needs(client):
     assert client.post("/api/counterpoint", json={"text": "70% of people. " * 5000}).status_code == 422
     ok = client.post("/api/counterpoint", json={"text": "70% of people. ".ljust(MAX_TEXT_CHARS)})
     assert ok.status_code == 200 and ok.json()["results"]
+
+
+def test_a_view_computed_while_an_import_lands_is_still_returned():
+    """Stats handlers run on worker threads and an import clears the memo from
+    the event loop. Reading the value back out of the dict after storing it
+    was a KeyError - a 500 on the refresh every import triggers - whenever the
+    clear landed in between."""
+    from randostats.api import Derived
+
+    class ClearedOnWrite(dict):
+        """The import landing in the window the bug lived in: after the value
+        is stored, before it is read back."""
+
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
+            self.clear()
+
+    derived = Derived()
+    derived._values = ClearedOnWrite()
+    assert derived.get_or_compute((0, "overview", ()), lambda: {"total": 1}) == {"total": 1}
+
+    derived = Derived()
+    assert derived.get_or_compute((0, "overview", ()), lambda: {"total": 1}) == {"total": 1}
+    # and the ordinary path still memoises
+    calls = []
+    for _ in range(2):
+        derived.get_or_compute((0, "contacts", ()), lambda: calls.append(1) or ["Alex"])
+    assert len(calls) == 1
+
+
+def test_conversation_gap_has_to_be_a_number_of_hours_a_timedelta_accepts(client):
+    """timedelta(hours=inf) is an OverflowError and nan a ValueError, both of
+    which reached the client as a 500; zero made every message its own
+    conversation."""
+    for bad in ("inf", "-inf", "nan", "0", "-6", "1e12"):
+        assert client.get(f"/api/stats/conversations?gap_hours={bad}").status_code == 422, bad
+    assert client.get("/api/stats/conversations?gap_hours=6").status_code == 200
+    assert client.get("/api/stats/conversations?limit=0").status_code == 422
+    assert client.get("/api/stats/conversations?gap_hours=0.5&limit=5").status_code == 200
+
+
+def test_importing_the_api_module_builds_nothing(tmp_path):
+    """`app = create_app()` at the end of the module opened a second store - in
+    the default location, whatever --db said - and warmed a second dictionary,
+    on every `randostats serve` and every test run."""
+    import subprocess
+    import sys
+
+    import randostats.api as api
+
+    assert not hasattr(api, "app")
+    run = subprocess.run([sys.executable, "-c", "import randostats.api"], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert list(tmp_path.iterdir()) == [], "importing the module created files"
+
+
+def test_cli_import_says_why_a_file_was_refused(tmp_path, capsys):
+    """A parser that refuses a file - entity declarations, an archive claiming
+    too much, timestamps that read as nothing - used to end in a traceback."""
+    from randostats.cli import main
+
+    junk = tmp_path / "not-a-chat.txt"
+    junk.write_text("99/99/9999, 99:99 - a: x\n" * 1200)
+    assert main(["--db", str(tmp_path / "x.db"), "import", str(junk), "--me", "Sam"]) == 1
+    err = capsys.readouterr().err
+    assert "could not parse as whatsapp" in err and "Traceback" not in err

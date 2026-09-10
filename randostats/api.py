@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -32,6 +32,12 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024 * 1024
 
+# Nothing but an import sends a body at all, and those bodies are one short
+# sentence or a list of pack names.
+MAX_JSON_BYTES = 1024 * 1024
+# Boundary lines and part headers around the file itself.
+MULTIPART_OVERHEAD = 8 * 1024
+
 # Live-listening sessions are only there to stop the same spoken claim being
 # answered twice. Ids come from us, and old ones fall off the end.
 MAX_SESSIONS = 256
@@ -51,6 +57,18 @@ MAX_TEXT_CHARS = 4000
 MAX_LLM_GROUPS = 4
 
 
+def _too_large(limit: int) -> str:
+    megabytes = max(1, limit // (1024 * 1024))
+    return (f"file is larger than the {megabytes} MB limit; "
+            "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
+
+
+def _declared_length(request) -> int:
+    """What the request says it is about to send, or 0 when it does not say."""
+    value = request.headers.get("content-length", "")
+    return int(value) if value.isdigit() else 0
+
+
 def _netloc(value: str) -> str:
     """``host[:port]`` out of a Host or Origin header, lowercased."""
     value = value.strip().lower()
@@ -65,6 +83,36 @@ def _hostname(value: str) -> str:
     if netloc.startswith("["):  # [::1]:8765
         return netloc[1:].partition("]")[0]
     return netloc.rpartition(":")[0] if netloc.count(":") == 1 else netloc
+
+
+class Derived:
+    """Per-import memo for the aggregate views.
+
+    Stats handlers are sync, so Starlette runs them on worker threads, while
+    an import clears this from the event loop the moment it finishes. A value
+    is therefore returned from the local name: storing it and then reading it
+    back out of the dict is a KeyError waiting for that clear to land in
+    between, which is a 500 on the refresh every import triggers.
+    """
+
+    LIMIT = 256  # a very long session with many filters
+
+    def __init__(self) -> None:
+        self._values: dict[tuple, object] = {}
+
+    def get_or_compute(self, key: tuple, compute):
+        try:
+            return self._values[key]
+        except KeyError:
+            pass
+        value = compute()
+        if len(self._values) > self.LIMIT:
+            self._values.clear()
+        self._values[key] = value
+        return value
+
+    def clear(self) -> None:
+        self._values.clear()
 
 
 class PackConfig(BaseModel):
@@ -107,6 +155,18 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             if (site is not None and site not in ("same-origin", "none")) or \
                     (origin is not None and _netloc(origin) != _netloc(host)):
                 return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+            # Starlette spools a multipart body to a temporary file before the
+            # handler is ever called, so a check inside the handler bounds what
+            # the parser sees, not what the machine writes. Refuse on the
+            # length the request declares; the handler still checks what
+            # actually arrived, for a request that declares nothing.
+            if request.url.path == "/api/import":
+                if _declared_length(request) > MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD:
+                    return JSONResponse({"detail": _too_large(MAX_UPLOAD_BYTES)}, status_code=413)
+            elif _declared_length(request) > MAX_JSON_BYTES:
+                megabytes = MAX_JSON_BYTES // (1024 * 1024)
+                return JSONResponse({"detail": f"request body is larger than the {megabytes} MB limit"},
+                                    status_code=413)
         return None
 
     @app.middleware("http")
@@ -144,18 +204,13 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     state = {"version": 0}
     # Aggregates are pure functions of the imported messages, and a quarter of a
     # million of them take seconds to walk. Compute each view once per import.
-    derived: dict[tuple, object] = {}
+    derived = Derived()
 
     def messages():
         return messages_cache(state["version"])
 
     def remember(name: str, compute, **params):
-        key = (state["version"], name, tuple(sorted(params.items())))
-        if key not in derived:
-            if len(derived) > 256:  # a very long session with many filters
-                derived.clear()
-            derived[key] = compute()
-        return derived[key]
+        return derived.get_or_compute((state["version"], name, tuple(sorted(params.items()))), compute)
 
     def bump():
         state["version"] += 1
@@ -188,16 +243,19 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         # The multipart header usually declares the size; refuse before reading.
         declared = getattr(file, "size", None)
         if declared is not None and declared > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit; "
-                                     "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
+            raise HTTPException(413, _too_large(MAX_UPLOAD_BYTES))
         data = await file.read()
         if not data:
             raise HTTPException(400, "empty file")
         if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"file is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit; "
-                                     "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
+            raise HTTPException(413, _too_large(MAX_UPLOAD_BYTES))
         if fmt == "auto":
-            fmt = parsers.detect_format(file.filename or "", data) or ""
+            try:
+                # Sniffing a zip opens it, which an archive with millions of
+                # members makes expensive; that refusal is a 413 like any other.
+                fmt = parsers.detect_format(file.filename or "", data) or ""
+            except parsers.archive.ArchiveTooLarge as exc:
+                raise HTTPException(413, str(exc)) from exc
             if not fmt:
                 raise HTTPException(400, "could not work out the export format; pick one from the list")
         def read_and_store() -> list:
@@ -263,7 +321,11 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                             limit=max(1, min(limit, 500)), offset=max(0, offset))
 
     @app.get("/api/stats/conversations")
-    def conversations(gap_hours: float = 6.0, limit: int | None = None):
+    def conversations(gap_hours: float = Query(6.0, gt=0, le=24 * 365),
+                      limit: int | None = Query(None, ge=1, le=1000)):
+        # An unbounded float here reached timedelta(hours=inf), which is an
+        # OverflowError and a 500; "nan" is a ValueError one line later, and
+        # both are unencodable in the JSON response besides.
         rows = remember("health", lambda: stats.conversation_health(messages(), gap_hours=gap_hours), gap=gap_hours)
         # The summary always covers everyone; `limit` only trims what is charted.
         return {"gap_hours": gap_hours, "summary": stats.conversation_summary(rows), "rows": rows[:limit] if limit else rows}
@@ -377,4 +439,8 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     return app
 
 
-app = create_app()
+# No module-level ``app = create_app()``: importing this module would then open
+# a second store (in the default location, whatever --db said) and warm a second
+# dictionary. For ``uvicorn`` directly, use the factory:
+#
+#     uvicorn --factory randostats.api:create_app

@@ -16,7 +16,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("serve", help="run the web app")
-    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default: %(default)s). There is no login: bind anything wider "
+                        "and every message you have imported is readable, and deletable, by whoever "
+                        "reaches the port.")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
@@ -46,21 +49,34 @@ def main(argv: list[str] | None = None) -> int:
         hosts = [*LOOPBACK_HOSTS, *args.allow_host]
         if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
             hosts.append(args.host)
+        if args.host not in (*LOOPBACK_HOSTS, ""):
+            # There is no password on any of this. Say so before it is served.
+            print(f"warning: serving on {args.host}, which is not just this machine.\n"
+                  "         Nothing here asks for a password: anyone who can reach this port can read,\n"
+                  "         search and export every message you have imported, and delete the lot.\n"
+                  "         Bind 127.0.0.1 (the default) unless you mean it.", file=sys.stderr)
         uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
         return 0
 
     if args.cmd == "import":
         data = args.file.read_bytes()
         fmt = args.format
-        if fmt == "auto":
-            fmt = parsers.detect_format(args.file.name, data) or ""
-            if not fmt:
-                print("could not detect format; pass --format", file=sys.stderr)
-                return 2
-        if fmt == "whatsapp" and args.contact:
-            msgs = list(parsers.whatsapp.parse(data, args.me, contact=args.contact))
-        else:
-            msgs = parsers.parse(fmt, data, args.me)
+        try:
+            if fmt == "auto":
+                fmt = parsers.detect_format(args.file.name, data) or ""
+                if not fmt:
+                    print("could not detect format; pass --format", file=sys.stderr)
+                    return 2
+            if fmt == "whatsapp" and args.contact:
+                msgs = list(parsers.whatsapp.parse(data, args.me, contact=args.contact))
+            else:
+                msgs = parsers.parse(fmt, data, args.me)
+        except ValueError as exc:
+            # A refused file (entities, a zip claiming too much, a chat log
+            # whose timestamps read as nothing) is the user's problem to fix,
+            # not a crash to show them a traceback for.
+            print(f"could not parse as {fmt}: {exc}", file=sys.stderr)
+            return 1
         if not msgs:
             print(f"parsed as {fmt} but found no messages; check the format and your name", file=sys.stderr)
             return 1

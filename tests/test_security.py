@@ -55,7 +55,85 @@ HTML_SINKS = (".innerHTML", "insertAdjacentHTML", "hover(", "showTip(")
 # A value read off a row of API data: r.contact, p.contact, w.word, r[key], m.sender...
 ROW_VALUE = re.compile(r"\b[a-z]{1,4}(\.[a-zA-Z_]\w*|\[[^\]]+\])")
 # Escapes it, or turns it into a number. Either way it cannot carry markup.
-LAUNDERED = ("esc(", "dot(", "fmt(", "pct(", "mins(", "compact(", ".toFixed(", "Math.round(", "hueOf(")
+# The last four are helpers that either escape what they are handed (kpi,
+# highlight) or build their markup from a template this same scan covers
+# (sparkline, toneTable).
+LAUNDERED = ("esc(", "dot(", "fmt(", "pct(", "mins(", "compact(", ".toFixed(", "Math.round(", "hueOf(",
+             "highlight(", "kpi(", "sparkline(", "toneTable(")
+# A template literal that opens a tag is markup, wherever it is later put.
+MARKUP = re.compile(r"<[a-zA-Z/]")
+# `cond ? "num" : ""` writes one of two literals; the row only picks which.
+LITERAL_CHOICE = re.compile(r"""\?\s*(['"][^'"]*['"])\s*:\s*(['"][^'"]*['"])\s*$""")
+INTERPOLATION = re.compile(r"\$\{([^{}]*)\}")
+
+
+def _template_literals(text: str):
+    """(offset, source) for every template literal in the file.
+
+    Backticks are paired from the outside in, stepping over escapes and over
+    nested ``${...}`` (which may hold templates of their own). Quoted strings
+    and comments are deliberately *not* skipped: doing that needs a real
+    lexer, and getting it wrong (a regex literal holding a quote is enough)
+    silently drops templates from the scan, which is the failure this guard
+    is here to avoid.
+    """
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "`":
+            j, depth = i + 1, 0
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "`" and depth == 0:
+                    break
+                if text[j:j + 2] == "${":
+                    depth += 1
+                    j += 2
+                    continue
+                if text[j] == "}" and depth:
+                    depth -= 1
+                j += 1
+            yield i, text[i:j + 1]
+            i = j + 1
+        else:
+            i += 1
+
+
+def _unlaundered(expression: str) -> bool:
+    if any(safe in expression for safe in LAUNDERED) or LITERAL_CHOICE.search(expression):
+        return False
+    return bool(ROW_VALUE.search(expression))
+
+
+def unescaped_values(text: str) -> list[str]:
+    """Every interpolation that could put an imported string into markup.
+
+    Two passes, because a table's rows are written on the continuation lines
+    of a template whose innerHTML is on the line above, and the counterpoint
+    renderer builds its markup into a variable that is assigned somewhere
+    else entirely. Scanning only the line the sink is on saw neither.
+    """
+    line_of = {}
+    line = 1
+    for index, ch in enumerate(text):
+        line_of[index] = line
+        if ch == "\n":
+            line += 1
+    offenders = []
+    for start, body in _template_literals(text):  # any template that is markup
+        if not MARKUP.search(body):
+            continue
+        for match in INTERPOLATION.finditer(body):
+            if _unlaundered(match.group(1)):
+                offenders.append(f"line {line_of[start + match.start()]}: ${{{match.group(1)}}}")
+    for number, source in enumerate(text.splitlines(), start=1):  # and any sink line
+        if any(sink in source for sink in HTML_SINKS):
+            for expression in INTERPOLATION.findall(source):
+                if _unlaundered(expression):
+                    offenders.append(f"line {number}: ${{{expression}}}")
+    return sorted(set(offenders))
 
 
 def test_frontend_escapes_every_imported_value_it_renders():
@@ -65,15 +143,27 @@ def test_frontend_escapes_every_imported_value_it_renders():
     wrote, so every one of them must pass through esc() (or a numeric
     formatter) before it reaches innerHTML or a tooltip.
     """
-    offenders = []
-    for number, line in enumerate(APP_JS.read_text().splitlines(), start=1):
-        if not any(sink in line for sink in HTML_SINKS):
-            continue
-        for expression in re.findall(r"\$\{([^{}]*)\}", line):
-            if ROW_VALUE.search(expression) and not any(safe in expression for safe in LAUNDERED):
-                offenders.append(f"line {number}: ${{{expression}}}")
+    offenders = unescaped_values(APP_JS.read_text())
     assert not offenders, ("data reaching HTML without esc() or a numeric formatter:\n  "
                            + "\n  ".join(offenders))
+
+
+def test_the_escaping_scan_reaches_inside_multiline_templates():
+    """The guard above is only worth having if it sees the whole template.
+
+    Every table in the app is written on the continuation lines of a template
+    literal whose innerHTML assignment is on the line before, so a scan that
+    only read the line carrying the sink read almost none of the app.
+    """
+    table = ('$("#peaks").innerHTML = `<table><tbody>` +\n'
+             '  rows.map(r => `<tr><td>${esc(r.contact)}</td><td>${r.sender}</td></tr>`).join("");\n')
+    assert unescaped_values(table) == ["line 2: ${r.sender}"]
+    # a value built into a variable first, and assigned somewhere else
+    detached = ('const html = groups.map(g => `<div class="cp">${g.punchline}</div>`).join("");\n'
+                'box.innerHTML = html;\n')
+    assert unescaped_values(detached) == ["line 1: ${g.punchline}"]
+    # and it still passes what is laundered, or is a literal either way
+    assert unescaped_values('el.innerHTML = `<b>${esc(r.contact)}</b>${r.is_you ? " (you)" : ""}`;\n') == []
 
 
 def test_oversized_upload_is_refused(client, monkeypatch):
@@ -99,6 +189,48 @@ def test_archive_refuses_to_unpack_too_much(monkeypatch):
     monkeypatch.setattr(archive, "MAX_TOTAL_BYTES", 64)
     with pytest.raises(archive.ArchiveTooLarge, match="unpacks to"):
         list(archive.json_files(data))
+
+
+def test_a_small_archive_cannot_claim_to_unpack_into_hundreds_of_megabytes():
+    """The ceiling alone let a two-megabyte upload declare half a gigabyte of
+    content, because repetitive JSON deflates a few hundred times over. What
+    separates a bomb from a big export is how far it expands, not how much it
+    claims: a real export is prose and deflates five to fifteen times."""
+    bomb = _zip({"messages/inbox/a/message_1.json": "0" * (40 * 1024 * 1024)})
+    assert len(bomb) < 1024 * 1024, "40 MB of one character is nothing on disk"
+    with pytest.raises(archive.ArchiveTooLarge, match="for an archive this size"):
+        list(archive.json_files(bomb))
+    # ... while an archive that expands the way real text does is read
+    honest = _zip({"messages/inbox/a/message_1.json": json.dumps(
+        {"participants": [{"name": "Alex"}],
+         "messages": [{"sender_name": "Alex", "timestamp_ms": 1704229200000 + i, "content": f"message {i}"}
+                      for i in range(20_000)]})})
+    unpacked = sum(i.file_size for i in zipfile.ZipFile(io.BytesIO(honest)).infolist())
+    assert unpacked > len(honest) * 5, "the sample has to actually compress to be worth testing"
+    assert len(list(archive.json_files(honest))) == 1
+
+
+def test_a_huge_index_is_refused_before_the_archive_is_opened(monkeypatch):
+    """Sniffing the format calls names() on the raw upload, and ZipFile reads a
+    header for every member as it opens: the member cap was only consulted
+    afterwards, once that index was already in memory."""
+    data = _zip({f"messages/inbox/a{i}/message_1.json": "{}" for i in range(20)})
+    assert archive.declared_members(data) == 20
+    monkeypatch.setattr(archive, "MAX_MEMBERS", 5)
+    with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
+        archive.names(data)
+    with pytest.raises(archive.ArchiveTooLarge, match="more than the 5 allowed"):
+        list(archive.json_files(data))
+
+
+def test_an_archive_with_too_many_members_is_a_413_even_when_sniffed(client, monkeypatch):
+    """Nothing in here is a format worth parsing, so only the sniff ever opens
+    it: without a cap on that path the answer was "could not work out the
+    export format", after the whole index had been built."""
+    monkeypatch.setattr(archive, "MAX_MEMBERS", 5)
+    data = _zip({f"notes/a{i}.txt": "{}" for i in range(20)})
+    r = client.post("/api/import", files={"file": ("x.zip", data)}, data={"self_name": "Sam"})
+    assert r.status_code == 413 and "files" in r.json()["detail"]
 
 
 def test_archive_refuses_too_many_members(monkeypatch):
@@ -290,6 +422,53 @@ def test_the_cli_only_serves_loopback_unless_told_otherwise(tmp_path, monkeypatc
     cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--allow-host", "stats.lan"])
     with TestClient(served["app"], base_url="http://stats.lan") as c:
         assert c.get("/api/status").status_code == 200
+
+
+def test_a_body_larger_than_the_cap_is_refused_before_it_is_parsed(client, monkeypatch):
+    """Starlette spools a multipart body to a temporary file before the handler
+    runs, so the in-handler check bounded the parser, not the disk. The body
+    below is not valid multipart at all: reaching the handler would be a 4xx
+    from the form parser, so a 413 is the middleware refusing on the declared
+    length alone."""
+    import randostats.api as api
+
+    monkeypatch.setattr(api, "MAX_UPLOAD_BYTES", 1024)
+    r = client.post("/api/import", content=b"x" * 20_000,
+                    headers={"content-type": "multipart/form-data; boundary=zzz"})
+    assert r.status_code == 413 and "limit" in r.json()["detail"]
+
+    # the JSON endpoints never need a body this size either
+    big = json.dumps({"text": "70% of people", "pad": "x" * (api.MAX_JSON_BYTES + 1000)}).encode()
+    r = client.post("/api/counterpoint", content=big, headers={"content-type": "application/json"})
+    assert r.status_code == 413 and "limit" in r.json()["detail"]
+    # and an ordinary request still goes through
+    assert client.post("/api/counterpoint", json={"text": "70% of people"}).status_code == 200
+
+
+def test_serving_beyond_loopback_says_what_that_costs(tmp_path, monkeypatch, capsys):
+    """--host 0.0.0.0 is a documented option and there is no login anywhere in
+    this app, so it has to say so."""
+    import uvicorn
+
+    from randostats import cli
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+
+    cli.main(["--db", str(tmp_path / "cli.db"), "serve"])
+    assert capsys.readouterr().err == "", "the loopback default warns about nothing"
+
+    cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0"])
+    warning = capsys.readouterr().err
+    assert "warning" in warning and "password" in warning and "delete" in warning
+
+
+def test_the_listen_button_says_where_the_audio_goes():
+    """Continuous speech recognition is a cloud service in Chrome and Edge, and
+    it is meant to be used while other people are talking."""
+    html = (Path(__file__).resolve().parent.parent / "randostats" / "static" / "index.html").read_text()
+    note = html.split('id="counter-listen"', 1)[1].split("</div>", 3)
+    disclosure = " ".join(note[:3])
+    assert "speech recognition" in disclosure and "browser vendor" in disclosure
 
 
 def test_a_cross_site_page_cannot_import_or_delete_anything(client):
