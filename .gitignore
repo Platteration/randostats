@@ -8,3 +8,7 @@ data/
 dist/
 build/
 .env
+
+# Secrets: ignore every .env variant, but keep the documented template.
+.env*
+!.env.example
