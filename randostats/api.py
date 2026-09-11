@@ -56,6 +56,23 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 MAX_TEXT_CHARS = 4000
 MAX_LLM_GROUPS = 4
 
+# Every aggregate view is memoised on the parameters the *caller* chose (see
+# `remember`), so a parameter the caller can vary freely is a parameter that
+# can mint an unbounded number of distinct keys - each one a full walk of the
+# corpus, and every 256 of them clearing the memo the user's own tabs were
+# using. The front end asks for fifteen to thirty rows and one of five gap
+# values; bound what reaches the key to roughly that, the way /api/messages
+# already bounds its own limit.
+MAX_ROWS = 200
+# Conversation gaps are chosen from a five-entry select. A tenth of an hour is
+# six minutes, which is finer than the question can actually be asked.
+GAP_DECIMALS = 1
+
+
+def _rows(limit: int | None) -> int | None:
+    """A row count that came from outside, bounded to something sane."""
+    return None if limit is None else max(1, min(limit, MAX_ROWS))
+
 
 def _too_large(limit: int) -> str:
     megabytes = max(1, limit // (1024 * 1024))
@@ -146,14 +163,24 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             # A name that resolves to this machine is not a name we serve.
             return JSONResponse({"detail": "invalid host header; pass --allow-host to serve this name"},
                                 status_code=400)
+        # multipart/form-data needs no CORS preflight, so /api/import is
+        # reachable from any page in the browser unless the browser's own
+        # account of where the request came from is checked.
+        site = request.headers.get("sec-fetch-site")
+        origin = request.headers.get("origin")
+        cross_site = (site is not None and site not in ("same-origin", "none")) or \
+                     (origin is not None and _netloc(origin) != _netloc(host))
+        # A cross-site *read* of the JSON API is not something the front end
+        # ever makes, and the page that makes it cannot read the reply either
+        # - there are no CORS headers. It can still make this machine do the
+        # work, and an aggregate view is seconds of CPU on a real corpus, so
+        # a tab left open on any web page could hold a core indefinitely.
+        # Refuse those whatever the method. "/", "/static/*" and "/samples/*"
+        # stay open, so a bookmark or a typed URL still opens the app.
+        if cross_site and request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
         if request.method not in SAFE_METHODS:
-            # multipart/form-data needs no CORS preflight, so /api/import is
-            # reachable from any page in the browser unless the browser's own
-            # account of where the request came from is checked.
-            site = request.headers.get("sec-fetch-site")
-            origin = request.headers.get("origin")
-            if (site is not None and site not in ("same-origin", "none")) or \
-                    (origin is not None and _netloc(origin) != _netloc(host)):
+            if cross_site:
                 return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
             # Starlette spools a multipart body to a temporary file before the
             # handler is ever called, so a check inside the handler bounds what
@@ -169,14 +196,27 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                                     status_code=413)
         return None
 
-    @app.middleware("http")
-    async def security_guard(request, call_next):
-        refusal = refuse(request)
-        response = refusal if refusal is not None else await call_next(request)
+    def decorate(response):
         response.headers.setdefault("Content-Security-Policy", CSP)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         return response
+
+    @app.middleware("http")
+    async def security_guard(request, call_next):
+        refusal = refuse(request)
+        return decorate(refusal if refusal is not None else await call_next(request))
+
+    # Starlette builds its stack as [ServerErrorMiddleware] + user middleware +
+    # [ExceptionMiddleware] + router, so the middleware above is *inside* the
+    # 500 handler: an exception that escapes a route is turned into a response
+    # after it has unwound, and that response carried none of these headers.
+    # Nothing in the shipped API renders a user string into a 500 today; the
+    # headers are the second line of defence, and the point of a second line
+    # is that it is already there when the first one gives way.
+    @app.exception_handler(Exception)
+    def unhandled(request, exc):
+        return decorate(JSONResponse({"detail": "internal server error"}, status_code=500))
     store = Store(db_path)
 
     def build_engine() -> CounterpointEngine:
@@ -211,6 +251,18 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     def remember(name: str, compute, **params):
         return derived.get_or_compute((state["version"], name, tuple(sorted(params.items()))), compute)
+
+    def known_contact(contact: str | None) -> bool:
+        """Is this a name the store actually holds? None means everyone.
+
+        A name it does not hold is answered with the empty view whatever the
+        name is, so letting one through would walk the whole corpus and take
+        a memo slot for a string the caller invented. The set of real names
+        is itself one memo entry per import.
+        """
+        if contact is None:
+            return True
+        return contact in remember("contact_names", lambda: frozenset(m.contact for m in messages()))
 
     def bump():
         state["version"] += 1
@@ -299,14 +351,18 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     @app.get("/api/stats/contacts")
     def contacts(limit: int | None = None):
+        limit = _rows(limit)
         return remember("contacts", lambda: stats.contact_frequency(messages(), limit=limit), limit=limit)
 
     @app.get("/api/stats/timing")
     def timing(contact: str | None = None):
+        if not known_contact(contact):
+            return stats.timing([], contact=contact)
         return remember("timing", lambda: stats.timing(messages(), contact=contact), contact=contact)
 
     @app.get("/api/stats/timing/contacts")
     def timing_contacts(limit: int = 20):
+        limit = _rows(limit)
         return remember("peaks", lambda: stats.contact_peaks(messages(), limit=limit), limit=limit)
 
     @app.get("/api/messages")
@@ -325,34 +381,56 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                       limit: int | None = Query(None, ge=1, le=1000)):
         # An unbounded float here reached timedelta(hours=inf), which is an
         # OverflowError and a 500; "nan" is a ValueError one line later, and
-        # both are unencodable in the JSON response besides.
+        # both are unencodable in the JSON response besides. Rounding is the
+        # other half: bounded or not, a float the caller picks freely is an
+        # unbounded supply of memo keys. The answer echoes the value actually
+        # used, so a caller that asked for more precision can see it did not
+        # get it, and the floor keeps a gap of 0.0001 h from rounding away to
+        # nothing and walking straight past `gt=0`.
+        gap_hours = max(round(gap_hours, GAP_DECIMALS), 10 ** -GAP_DECIMALS)
         rows = remember("health", lambda: stats.conversation_health(messages(), gap_hours=gap_hours), gap=gap_hours)
         # The summary always covers everyone; `limit` only trims what is charted.
         return {"gap_hours": gap_hours, "summary": stats.conversation_summary(rows), "rows": rows[:limit] if limit else rows}
 
     @app.get("/api/stats/members")
     def members(contact: str):
+        if not known_contact(contact):
+            return stats.group_members([], contact)
         return remember("members", lambda: stats.group_members(messages(), contact), contact=contact)
 
     @app.get("/api/stats/misspellings")
     def misspellings(direction: str = "sent", limit: int = 50, contact: str | None = None):
         if direction not in ("sent", "received"):
             raise HTTPException(400, "direction must be sent or received")
+        limit = _rows(limit)
+        if not known_contact(contact):
+            return stats.misspellings([], speller(), direction=direction, limit=limit, contact=contact)
         return remember("misspellings", lambda: stats.misspellings(messages(), speller(), direction=direction,
                                                                    limit=limit, contact=contact),
                         direction=direction, limit=limit, contact=contact)
 
     @app.get("/api/stats/emoji")
     def emoji(limit: int = 30, contact: str | None = None):
+        limit = _rows(limit)
+        if not known_contact(contact):
+            return stats.emoji_stats([], limit=limit, contact=contact)
         return remember("emoji", lambda: stats.emoji_stats(messages(), limit=limit, contact=contact),
                         limit=limit, contact=contact)
 
     @app.get("/api/stats/tone")
     def tone(contact: str | None = None):
+        if not known_contact(contact):
+            return stats.tone([], contact=contact)
         return remember("tone", lambda: stats.tone(messages(), contact=contact), contact=contact)
 
     @app.get("/api/stats/words")
     def words(direction: str | None = None, limit: int = 50):
+        # Unvalidated, this was the third free-form memo key: any string at
+        # all came back as an empty view and kept a slot. Its siblings above
+        # already refuse anything but the two directions.
+        if direction and direction not in ("sent", "received"):
+            raise HTTPException(400, "direction must be sent or received")
+        limit = _rows(limit)
         return remember("words", lambda: stats.word_frequency(messages(), direction=direction, limit=limit),
                         direction=direction, limit=limit)
 
@@ -362,6 +440,10 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         available = stats.years(msgs)
         if year is None and available:
             year = available[-1]
+        if year not in available:
+            # A year with nothing in it is the empty card whatever the number,
+            # so it neither walks the corpus nor takes a memo slot of its own.
+            return {"years": available, "card": stats.wrapped([], year=year, speller=speller())}
         card = dict(remember("wrapped", lambda: stats.wrapped(msgs, year=year, speller=speller()), year=year))
         # Tie the two halves of the app together: answer one of your own
         # percentages with a real statistic of the same size.

@@ -22,12 +22,23 @@ from typing import Iterable, Iterator
 from ..models import Message
 
 # Timestamp, then " - " or "] ", then "Sender: text".
+#
+# Every run of whitespace here belongs to exactly one construct, and the
+# sender cannot start with whitespace. That is not style: the earlier pattern
+# put three whitespace quantifiers in a row (one inside `time`, two in the
+# separator) next to a sender that also accepts spaces, so a line that never
+# reaches its ":" made the engine try every way of dividing the spaces between
+# them. A 4 KB upload of one such line cost 22 s of CPU, and the cost is
+# quadratic in the length of the line, which no line- or file-count bound can
+# reach. Pinning each `\s*` to the thing that must follow it - a "]", a dash,
+# or a non-space sender - leaves exactly one way to divide them, and the same
+# line is now linear (400 KB in 0.014 s).
 _LINE = re.compile(
     r"""^‎?\[?
         (?P<date>\d{1,4}[./-]\d{1,2}[./-]\d{1,4}),?\s+
-        (?P<time>\d{1,2}:\d{2}(?::\d{2})?\s*(?:[APap]\.?[Mm]\.?)?)
-        \]?\s*[-–]?\s*
-        (?P<sender>[^:]{1,80}?):\s
+        (?P<time>\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap]\.?[Mm]\.?)?)
+        (?:\s*\])?(?:\s*[-–])?\s*
+        (?P<sender>[^:\s][^:]{0,79}?):\s
         (?P<text>.*)$""",
     re.VERBOSE,
 )

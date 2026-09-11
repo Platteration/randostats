@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import stat
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from randostats.api import create_app
+from randostats.models import Message
 from randostats.parsers import archive
+from randostats.store import Store
 
 APP_JS = Path(__file__).resolve().parent.parent / "randostats" / "static" / "app.js"
 
@@ -578,6 +583,57 @@ def test_a_counterpoint_session_id_has_to_be_one_we_issued(client):
     assert MAX_SESSIONS > 0
 
 
+# -- who is allowed to read it off the disk ----------------------------------
+# The two guards below are about the port. Nothing there stops the account at
+# the next desk from opening the file.
+
+def test_the_message_database_is_not_readable_by_other_accounts(tmp_path):
+    """Every message the user ever imported, and their correspondents', in one
+    file the README promises stays on their machine.
+
+    It was created at whatever the umask happened to be: 0644 in a 0755
+    directory on a default install, so any other local account could copy it
+    and read the lot. The app already writes the temporary copy of an
+    iMessage upload 0600 (parsers/imessage.py), so the permanent one was the
+    only place that did not. The umask is opened wide here deliberately -
+    that is the only way this notices when the narrowing goes away.
+    """
+    kept = os.umask(0)
+    try:
+        db = tmp_path / "made-by-us" / "randostats.db"
+        store = Store(db)
+        store.add_messages([Message(contact="Alex", sender="Alex", direction="received",
+                                    timestamp=datetime(2024, 1, 1, 10, 0), text="secret", source="json")])
+        # Not "is 0600": what matters is that nobody outside this account is in it.
+        assert not stat.S_IMODE(db.stat().st_mode) & 0o077, "another account can read every message"
+        assert not stat.S_IMODE(db.parent.stat().st_mode) & 0o077, "...or walk in and open the file"
+
+        # SQLite gives the rollback journal the database file's own permissions,
+        # so a write in flight is covered by the same change.
+        store.conn.execute("BEGIN")
+        store.conn.execute("INSERT INTO settings (key, value) VALUES ('k', 'v')")
+        journal = db.with_name(db.name + "-journal")
+        if journal.exists():
+            assert not stat.S_IMODE(journal.stat().st_mode) & 0o077, "the journal spills what the database hides"
+        store.conn.execute("ROLLBACK")
+
+        # A database from before this existed is repaired, not just a new one.
+        legacy = tmp_path / "legacy.db"
+        Store(legacy).close()
+        os.chmod(legacy, 0o644)
+        Store(legacy)
+        assert not stat.S_IMODE(legacy.stat().st_mode) & 0o077, "an existing database keeps its old mode"
+
+        # But a directory that was already there is not ours to re-mode: --db
+        # can point into /tmp or a home directory.
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o755)
+        Store(shared / "x.db")
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o755, "narrowed a directory it did not create"
+    finally:
+        os.umask(kept)
+
+
 # -- who is allowed to talk to us -------------------------------------------
 # There is no login: whatever reaches the port reads every message. Both of
 # these came from a page on the internet being able to reach 127.0.0.1.
@@ -703,6 +759,35 @@ def test_the_listen_button_says_where_the_audio_goes():
     assert "speech recognition" in disclosure and "browser vendor" in disclosure
 
 
+def test_the_listen_note_does_not_promise_what_llm_mode_breaks():
+    """The note sat above the microphone and said, flatly, that nothing else
+    here leaves your machine.
+
+    With --llm it does: the claim goes to Anthropic, and `claim.raw` carries
+    the clause spoken around the number with it - the speech of people in the
+    room who never touched the app. The note now comes from the server's own
+    llm flag, so the promise is only made when it is true, and the box that
+    sends it is off until somebody ticks it.
+    """
+    static = Path(__file__).resolve().parent.parent / "randostats" / "static"
+    html = static.read_text() if static.is_file() else (static / "index.html").read_text()
+    app_js = APP_JS.read_text()
+
+    assert "Nothing else here leaves your machine" not in html, \
+        "the absolute claim is back in the markup, where no flag can withdraw it"
+    assert 'id="listen-privacy-llm"' in html, "nothing for the front end to write the honest version into"
+
+    # The checkbox is what performs the round trip, so it starts off.
+    box = html.split('id="counter-llm"', 1)[0].rsplit("<input", 1)[1] + \
+        html.split('id="counter-llm"', 1)[1].split(">", 1)[0]
+    assert "checked" not in box, "sending the room's speech to a third party is opt-out again"
+
+    # And the sentence is chosen by the server's flag, not hard-coded.
+    filled = app_js.split('listen-privacy-llm', 1)[1].split(";", 1)[0]
+    assert "st.llm" in filled, "the note no longer depends on whether --llm is on"
+    assert "Anthropic" in filled, "the --llm branch does not say where the words go"
+
+
 def test_a_cross_site_page_cannot_import_or_delete_anything(client):
     """multipart/form-data is a CORS-safelisted content type, so a plain form
     on any page reaches /api/import with no preflight to stop it."""
@@ -720,7 +805,95 @@ def test_a_cross_site_page_cannot_import_or_delete_anything(client):
     assert client.get("/api/status").json()["messages"] == 1
 
 
+def test_a_cross_site_page_cannot_read_the_api_either(client):
+    """Refusing only the writes left every read open to any page the user has
+    in another tab.
+
+    It cannot see the answer - there are no CORS headers - but it can make
+    this machine compute it, and an aggregate view is a full walk of the
+    corpus. The app is the only thing that calls /api/*, and it calls it
+    same-origin, so a cross-site read is never anything but that.
+    """
+    cross = {"sec-fetch-site": "cross-site", "origin": "https://evil.example"}
+    for path in ("/api/status", "/api/messages?limit=500", "/api/stats/overview",
+                 "/api/stats/conversations?gap_hours=6", "/api/wrapped"):
+        assert client.get(path, headers=cross).status_code == 403, path
+
+    # The page itself is not the API: a bookmark or a typed URL still opens it.
+    for path in ("/", "/static/app.js"):
+        assert client.get(path, headers=cross).status_code == 200, path
+
+    # And the front end's own reads are untouched.
+    same = {"sec-fetch-site": "same-origin", "origin": "http://localhost"}
+    assert client.get("/api/status", headers=same).status_code == 200
+    assert client.get("/api/status").status_code == 200, "a client that names no site is not a cross-site one"
+
+
+def test_a_caller_cannot_choose_the_memo_key(client):
+    """Every aggregate view is memoised on the parameters the caller sent, and
+    256 distinct keys clear the memo for everyone.
+
+    So each of them has to come from a set this app decides the size of: the
+    gap is quantised, row counts are clamped, and a name the store does not
+    hold is answered without computing or remembering anything.
+    """
+    made = 250
+    rows = [{"contact": f"person {n}", "sender": f"person {n}", "direction": "received",
+             "timestamp": "2024-01-01T10:00:00", "text": f"hello {n}"} for n in range(made)]
+    assert client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())},
+                       data={"self_name": "Sam", "fmt": "json"}).status_code == 200
+
+    # A row count from outside is not a row count this app will honour, so
+    # asking for more than there are cannot hand back one key per number.
+    listed = client.get(f"/api/stats/contacts?limit={made * 10}").json()
+    assert len(listed) < made, "a caller's own limit reached the view, and the memo key with it"
+
+    # The gap the answer reports is the gap it used. Two a caller can tell
+    # apart must not be two keys, and rounding must not reach zero.
+    near = [client.get(f"/api/stats/conversations?gap_hours={g}").json()["gap_hours"]
+            for g in ("6.1234", "6.1239")]
+    assert near[0] == near[1], "two gaps a caller can tell apart are two memo keys"
+    assert near[0] != 6.1234, "and the answer has to say which gap it actually used"
+    assert client.get("/api/stats/conversations?gap_hours=0.0001").json()["gap_hours"] > 0, \
+        "rounding must not round a positive gap away to nothing"
+
+    # A direction that is not one of the two is refused, like its siblings.
+    assert client.get("/api/stats/words?direction=made-up").status_code == 400
+
+    # A name nobody has is answered with the empty view, not computed and kept.
+    assert client.get("/api/stats/members?contact=person 1").json() != []
+    for path in ("/api/stats/tone?contact=nobody", "/api/stats/emoji?contact=nobody",
+                 "/api/stats/timing?contact=nobody", "/api/stats/misspellings?contact=nobody"):
+        assert client.get(path).status_code == 200, path
+    assert client.get("/api/stats/members?contact=nobody").json() == []
+
+
 def test_a_refused_request_still_carries_the_security_headers(client):
     r = _import(client, **{"sec-fetch-site": "cross-site"})
     assert r.status_code == 403
     assert "script-src 'self'" in r.headers["content-security-policy"]
+
+
+def test_a_500_carries_them_too(tmp_path):
+    """Starlette's stack is [ServerErrorMiddleware] + user middleware + router,
+    so the header middleware is *inside* the 500 handler and had already
+    unwound by the time a crash became a response.
+
+    Nothing in the shipped API renders a user string into a 500 today, so this
+    pins the second line of defence for the handler that one day does.
+    """
+    app = create_app(tmp_path / "boom.db", use_llm=False)
+
+    @app.get("/boom")
+    def boom():
+        raise RuntimeError("kaboom")
+
+    with TestClient(app, base_url=LOCAL, raise_server_exceptions=False) as c:
+        r = c.get("/boom")
+        assert r.status_code == 500
+        # The same three the middleware sets, asserted against a response that
+        # did go through it rather than against a list written out twice.
+        for header, value in c.get("/api/status").headers.items():
+            if header in ("content-security-policy", "x-content-type-options", "referrer-policy"):
+                assert r.headers.get(header) == value, header
+        assert "kaboom" not in r.text, "the crash told the caller about itself"

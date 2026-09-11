@@ -67,6 +67,7 @@ def test_detect_format():
 import inspect
 import io
 import json as _json
+import time
 import zipfile
 
 from randostats.parsers import discord, meta, telegram
@@ -263,6 +264,40 @@ def test_whatsapp_stops_reading_the_file_it_gives_up_on(monkeypatch):
     long = lines_examined(whatsapp.MAX_UNPARSEABLE * 40)
     assert short == long, "the work still grows with the file it is refusing"
     assert long < whatsapp.MAX_UNPARSEABLE * 20, "and it is a small part of even the short one"
+
+
+def test_whatsapp_line_costs_its_length_not_its_length_squared():
+    """One long line must not be able to price itself out of the machine.
+
+    ``_LINE`` used to put three whitespace quantifiers in a row next to a
+    sender that also accepts spaces, so a line opening with a real timestamp
+    and then never reaching its ":" made the engine try every way of dividing
+    the spaces between them. The file below is 4 KB and took 22 s; at 400 KB
+    it is hours, and neither MAX_UNPARSEABLE nor HEAD_LINES can see it,
+    because both bound the number of *lines* and this is one line.
+
+    The budget comes from an ordinary line of the same length rather than
+    from a stopwatch, so the check says the same thing on a slow machine: a
+    line that fails to match may cost what a line that matches costs, and not
+    five orders of magnitude more.
+    """
+    run = 4000
+    hostile = ("1/1/23, 1:00 PM - Alex: hi\n1/1/23, 1:11 PM " + " " * run + "x").encode()
+    ordinary = ("1/1/23, 1:00 PM - Alex: hi\n1/1/23, 1:11 PM - Alex: " + "a" * run).encode()
+    # Both entry points run the pattern, and detect_format runs it on the
+    # event loop, before the import ever reaches a worker thread.
+    assert parsers.detect_format("chat.txt", hostile) == "whatsapp"
+
+    def cost(payload: bytes) -> float:
+        def once() -> float:
+            start = time.perf_counter()
+            parsers.detect_format("chat.txt", payload)
+            list(whatsapp.parse(payload, "Sam"))
+            return time.perf_counter() - start
+        return min(once() for _ in range(3))  # the minimum is the one the machine was not busy for
+
+    budget = max(cost(ordinary), 0.005) * 20
+    assert cost(hostile) < budget, "matching a single long line is superlinear again"
 
 
 def test_whatsapp_does_not_split_the_whole_upload_at_once():

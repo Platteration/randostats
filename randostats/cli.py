@@ -25,7 +25,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
                    help="also answer requests whose Host header is NAME (repeatable). Only loopback names are "
                         "served by default, so a page on the internet cannot point a name it owns at this port. "
-                        "Pass '*' to turn the check off.")
+                        "NAME becomes a name this server trusts completely: the cross-site check measures "
+                        "'another site' against the names served, so any page that can make a browser resolve "
+                        "NAME to this machine can read and delete everything, exactly as the front end can. "
+                        "Pass '*' to accept any name at all, which is that with nothing left to resist it.")
 
     i = sub.add_parser("import", help="import an export file from the terminal")
     i.add_argument("file", type=Path)
@@ -59,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
                   "         Nothing here asks for a password: anyone who can reach this port can read,\n"
                   "         search and export every message you have imported, and delete the lot.\n"
                   "         Bind 127.0.0.1 (the default) unless you mean it.", file=sys.stderr)
+            if args.llm:
+                # The warning above is about the data. --llm also hands out a
+                # credential that costs money, which is a separate decision.
+                print("         With --llm, they can also make this server call the Anthropic API on your\n"
+                      "         credential. RANDOSTATS_LLM_CALLS_PER_HOUR caps how much of that it will do.",
+                      file=sys.stderr)
         uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
         return 0
 

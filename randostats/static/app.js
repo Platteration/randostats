@@ -905,6 +905,14 @@
   async function refresh() {
     const st = await api("/api/status");
     state.llm = st.llm; $("#llm-label").hidden = !st.llm;
+    // The note above the microphone has to match what the server will actually
+    // do with what it hears. With --llm on, the claim and the words spoken
+    // around it go to Anthropic, so the sentence promising otherwise cannot
+    // stand; the box that does it is off until someone ticks it.
+    $("#listen-privacy-llm").textContent = st.llm
+      ? "Tick “sharpen with Claude” and the claim — including the words spoken around the number — "
+        + "is sent to Anthropic to be rephrased. Leave it unticked and nothing else here leaves your machine."
+      : "Nothing else here leaves your machine.";
     $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
     if (st.self_name) $("#self-name").value = st.self_name;
     const contacts = st.messages ? await api("/api/stats/contacts") : [];

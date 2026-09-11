@@ -50,13 +50,21 @@ Open the app, go to **Import**, and either click **Load sample data** or import
 your own export (see the help panel on that tab for how to export from each app).
 
 It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses anything
-that posts to it from another site. There is no login, so whatever reaches the
-port can read every message you imported, and a page on the internet can point
-a name it owns at 127.0.0.1 and try. To reach it under another name, say which:
+another site sends it — reads of the API as well as writes. There is no login,
+so whatever reaches the port can read every message you imported, and a page on
+the internet can point a name it owns at 127.0.0.1 and try. To reach it under
+another name, say which:
 
 ```bash
 randostats serve --host 0.0.0.0 --allow-host laptop.lan
 ```
+
+Those are not two independent guards. "Another site" is measured against the
+names this server answers to, so a name you add with `--allow-host` is a name
+it trusts completely: any page that can make your browser resolve that name to
+this machine — a hostile router, DNS on the local network, or plain DNS
+rebinding for `'*'` — can then read and delete everything, exactly as the
+front end can. Add a name only on a network where you would accept that.
 
 You can also import from the terminal:
 
@@ -96,9 +104,15 @@ export ANTHROPIC_API_KEY=...        # or `ant auth login`
 randostats serve --llm
 ```
 
-The option only appears when a credential is actually found, and if a request
-fails, is refused, or returns something unusable, the rule-based punchline
-stays on screen rather than the answer disappearing.
+The option only appears when a credential is actually found, and it starts
+unticked: the claim is a thing that leaves your machine, so it is something you
+turn on rather than something you remember to turn off. If a request fails, is
+refused, or returns something unusable, the rule-based punchline stays on
+screen rather than the answer disappearing.
+
+The same fallback bounds the bill. No more than
+`RANDOSTATS_LLM_CALLS_PER_HOUR` (200) requests an hour are sent, after which
+the rule-based punchline is simply what you get.
 
 Claude only *chooses among and rephrases* the facts the engine already matched
 from `randostats/counterpoint/facts.json`. It is never asked to invent

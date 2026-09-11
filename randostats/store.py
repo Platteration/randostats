@@ -43,11 +43,40 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 
+def _private(path: Path, mode: int) -> None:
+    """Narrow something we own, and shrug if the filesystem has no modes.
+
+    This file is the user's whole message history, and their correspondents',
+    and the README promises it stays on their machine. It was created at
+    whatever the umask said - 0644 and a 0755 directory on a default install,
+    so every other account on a shared box could read every message. The app
+    already treats the same bytes as 0600 while they are a temporary copy of
+    an upload (parsers/imessage.py), so the permanent copy was the odd one
+    out. SQLite gives the rollback journal the database file's own
+    permissions, which is why narrowing the database is enough to narrow
+    that too.
+    """
+    try:
+        os.chmod(path, mode)
+    except OSError:  # FAT or a network share, or a file we do not own
+        pass
+
+
 class Store:
     def __init__(self, path: Path | str = DEFAULT_DB):
         self.path = Path(path)
-        if str(self.path) != ":memory:":
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+        on_disk = str(self.path) != ":memory:"
+        if on_disk:
+            try:
+                # mkdir's mode is masked by the umask, so it is set again below.
+                self.path.parent.mkdir(parents=True, mode=0o700)
+            except FileExistsError:
+                # Only the directory this process creates is narrowed. A --db
+                # pointing into a directory that was already there - /tmp, or
+                # a home directory - is not ours to change the mode of.
+                pass
+            else:
+                _private(self.path.parent, 0o700)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # The API serves requests from a thread pool and shares one connection.
@@ -57,6 +86,10 @@ class Store:
         with self.lock:
             self.conn.executescript(_SCHEMA)
             self._ensure_identity_index()
+        if on_disk:
+            # After the schema, so the file is certain to exist. An older
+            # database that was created 0644 is repaired here, not just a new one.
+            _private(self.path, 0o600)
 
     def _ensure_identity_index(self) -> None:
         """Add the identity index, collapsing any duplicates an older build left."""

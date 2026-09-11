@@ -8,6 +8,7 @@ have must end in None, never an exception that fails the request.
 from __future__ import annotations
 
 import json
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
@@ -215,3 +216,41 @@ def test_one_request_cannot_fan_out_into_unlimited_paid_calls(tmp_path, monkeypa
         body = client.post("/api/counterpoint", json={"text": text}).json()
     assert len(body["results"]) > MAX_LLM_GROUPS, "the rule-based answers are not capped"
     assert len(calls) <= MAX_LLM_GROUPS, f"{len(calls)} paid calls for one request"
+
+
+def test_many_requests_cannot_spend_without_limit(monkeypatch, counterpoints):
+    """Capping one request's fan-out bounds the fan-out, not the bill.
+
+    Nothing counted how many requests arrived, so whoever could reach a
+    widened port could hold the owner's Anthropic account open at four billed
+    calls a POST. Past the hour's ceiling this has to do what a missing
+    credential already does: fall back, quietly, to the rule-based line.
+    """
+    made: list[dict] = []
+
+    def parse(**kwargs):
+        made.append(kwargs)
+        return reply(counterpoints[0].fact.id)
+
+    monkeypatch.setattr(llm, "_client", SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(parse=parse))))
+    # A ceiling low enough to reach, and a window that starts empty, so what
+    # is counted is this test's and not whatever else ran in this process.
+    ceiling = 3
+    monkeypatch.setattr(llm, "MAX_CALLS_PER_HOUR", ceiling)
+    monkeypatch.setattr(llm, "_calls", deque())
+
+    got = [llm.sharpen("70% of people drink beer", counterpoints) for _ in range(ceiling * 3)]
+    assert len(made) == ceiling, f"{len(made)} calls billed against a ceiling of {ceiling}"
+    # Past it the caller is not failed, only unsharpened.
+    assert all(g is not None for g in got[:ceiling])
+    assert all(g is None for g in got[ceiling:])
+
+
+def test_the_paid_call_cannot_hold_a_worker_thread_for_ten_minutes(monkeypatch, counterpoints):
+    """`counterpoint` is a sync endpoint, so a stalled call occupies an anyio
+    worker for as long as it stalls, and the SDK's own default is 600 s."""
+    seen: dict = {}
+    monkeypatch.setattr(llm, "_client", fake_client(reply(counterpoints[0].fact.id), seen=seen))
+    monkeypatch.setattr(llm, "_calls", deque())
+    llm.sharpen("70% of people drink beer", counterpoints)
+    assert 0 < seen["timeout"] < 600, "the SDK's ten-minute default is back"

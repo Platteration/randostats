@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
+from collections import deque
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -23,6 +25,36 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 MODEL = os.environ.get("RANDOSTATS_MODEL", "claude-opus-5")
+
+# api.py's MAX_LLM_GROUPS bounds how far one request fans out. It says nothing
+# about how many requests arrive, which is the quantity that costs money:
+# anyone who can reach a widened port, or a page that has rebound a name onto
+# it, could hold the owner's Anthropic account open indefinitely at four
+# billed calls per POST. Bound it here, where the call is actually made, so
+# every caller is bounded and not just the one endpoint that exists today.
+# There is exactly one user, so a deque of timestamps under a lock is enough.
+MAX_CALLS_PER_HOUR = int(os.environ.get("RANDOSTATS_LLM_CALLS_PER_HOUR", "200"))
+_WINDOW_SECONDS = 3600.0
+_calls: deque[float] = deque()
+_calls_lock = threading.Lock()
+
+# The SDK's own default is ten minutes, and `counterpoint` is a sync endpoint,
+# so a stalled call holds an anyio worker thread for all of it. Forty of them
+# and every other endpoint in the app is waiting.
+TIMEOUT_SECONDS = 20
+
+
+def _claim_a_call() -> bool:
+    """Take a slot from the rolling hour, or report that it is spent."""
+    now = time.monotonic()
+    with _calls_lock:
+        while _calls and now - _calls[0] >= _WINDOW_SECONDS:
+            _calls.popleft()
+        if len(_calls) >= MAX_CALLS_PER_HOUR:
+            return False
+        _calls.append(now)
+        return True
+
 
 _client = None
 _client_lock = threading.Lock()
@@ -100,6 +132,12 @@ def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None
     """
     if not counterpoints:
         return None
+    if not _claim_a_call():
+        # Falling back is already what a missing credential or a network blip
+        # does, and the rule-based punchline is on screen either way.
+        log.warning("Claude rebuttals are over %d calls in the last hour; keeping the rule-based one "
+                    "(raise RANDOSTATS_LLM_CALLS_PER_HOUR if that is wrong)", MAX_CALLS_PER_HOUR)
+        return None
 
     facts = "\n".join(
         f"- id={cp.fact.id}: {cp.fact.statement} (source: {cp.fact.source}, {cp.fact.year}; gap from claim: {cp.gap} points)"
@@ -116,6 +154,7 @@ def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None
             output_config={"effort": "low"},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
+            timeout=TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 - see the docstring; nothing here is worth a 500
         log.warning("Claude rebuttal failed, keeping the rule-based one: %s", exc)
