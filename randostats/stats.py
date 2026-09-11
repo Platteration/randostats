@@ -142,8 +142,15 @@ def contact_frequency(messages: list[Message], limit: int | None = None) -> list
 # ---------------------------------------------------------------------------
 
 def timing(messages: list[Message], contact: str | None = None) -> dict:
-    """When messages happen: hour-of-day, weekday, a 7x24 heatmap, monthly volume, and reply latency."""
-    msgs = [m for m in messages if contact is None or m.contact == contact]
+    """When messages happen: hour-of-day, weekday, a 7x24 heatmap, monthly volume, and reply latency.
+
+    An empty ``contact`` means everyone, as it does in every other filter here
+    (``search``, ``emoji_stats``, ``misspellings``, ``tone`` all spell it
+    ``if contact and ...``). Spelled ``contact is None``, this one alone read
+    ``?contact=`` as "nobody", so the same query answered two different ways
+    depending on which endpoint it was sent to.
+    """
+    msgs = [m for m in messages if not contact or m.contact == contact]
     if not msgs:
         return {"by_hour": [], "by_weekday": [], "heatmap": [], "by_month": [], "busiest_day": None,
                 "reply_latency": None, "peak_hour": None, "peak_weekday": None}
@@ -474,7 +481,12 @@ def conversation_summary(rows: list[dict]) -> dict:
 
 
 def group_members(messages: list[Message], contact: str) -> list[dict]:
-    """Per-person breakdown inside one conversation, which is what makes a group chat readable."""
+    """Per-person breakdown inside one conversation, which is what makes a group chat readable.
+
+    ``contact`` names one conversation; unlike the filters elsewhere in this
+    module there is no "everyone" to fall back on, so an empty name matches
+    nothing and the answer is the empty list.
+    """
     msgs = [m for m in messages if m.contact == contact]
     if not msgs:
         return []

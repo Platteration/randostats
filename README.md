@@ -49,11 +49,22 @@ randostats serve                     # http://127.0.0.1:8765
 Open the app, go to **Import**, and either click **Load sample data** or import
 your own export (see the help panel on that tab for how to export from each app).
 
-It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses anything
-another site sends it — reads of the API as well as writes. There is no login,
-so whatever reaches the port can read every message you imported, and a page on
-the internet can point a name it owns at 127.0.0.1 and try. To reach it under
-another name, say which:
+It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses reads and
+writes that a browser tells it came from another site — anything carrying
+`Sec-Fetch-Site: cross-site`, or an `Origin` that is not the name it was asked
+under. A request that says nothing about where it came from is answered: that
+is what keeps `curl` and `randostats import` working, and it is also what an
+older browser sends, since Firefox before 90 and Safari before 16.4 attach no
+`Sec-Fetch-Site` and a `no-cors` GET carries no `Origin` on any browser at
+all. So that check is a latch rather than a wall. What does not depend on it
+is that every memoised view is keyed on a value this app chose rather than on
+whatever arrived — one of the five conversation gaps in the menu, a row count
+clamped to 200, a name the store actually holds — so the cheap trick of
+varying a parameter to make the machine walk your whole history again has
+nothing left to vary but the row count. There is no login, so whatever reaches
+the port can read every message you imported, and a page on the internet can
+point a name it owns at 127.0.0.1 and try. To reach it under another name,
+say which:
 
 ```bash
 randostats serve --host 0.0.0.0 --allow-host laptop.lan

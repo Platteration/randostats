@@ -14,12 +14,37 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from randostats import stats
 from randostats.api import create_app
 from randostats.models import Message
 from randostats.parsers import archive
 from randostats.store import Store
 
-APP_JS = Path(__file__).resolve().parent.parent / "randostats" / "static" / "app.js"
+STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
+APP_JS = STATIC / "app.js"
+INDEX = STATIC / "index.html"
+
+
+def memo(client):
+    """The per-import memo itself.
+
+    Every assertion about a caller-chosen key has to be made here. A status
+    code cannot tell the two cases apart: an invented name was answered 200
+    before any of this existed - after walking the whole corpus and keeping
+    the answer under the name the caller made up.
+    """
+    return client.app.state.derived._values
+
+
+def offered_gaps():
+    """The conversation gaps the interface actually offers, read off the page.
+
+    Derived from the markup rather than from `api.GAP_CHOICES`, so the bound
+    is checked against what the app needs to support rather than against the
+    value under test.
+    """
+    select = INDEX.read_text().split('id="convo-gap"', 1)[1].split("</select>", 1)[0]
+    return [float(v) for v in re.findall(r'value="([^"]+)"', select)]
 
 
 # The app only answers to the names it is meant to be reached by, so a test
@@ -634,6 +659,52 @@ def test_the_message_database_is_not_readable_by_other_accounts(tmp_path):
         os.umask(kept)
 
 
+def test_every_directory_this_app_makes_is_private_too(tmp_path):
+    """The database is 0600, but a directory another account can write to is a
+    database they can move aside and replace.
+
+    `mkdir(parents=True, mode=0o700)` does not do this on its own, twice over.
+    Path.mkdir documents that missing *parents* are "created with the default
+    permissions without taking mode into account", so only the leaf ever
+    carried the mode - a --db two new levels deep left the upper one at
+    whatever the umask said. And the mode the leaf does get is masked by the
+    umask, which only ever clears bits, so a umask that clears owner bits
+    leaves a directory this app cannot even write in unless something chmods
+    it afterwards.
+
+    Both umasks below are chosen so that mkdir cannot produce the answer by
+    itself: under 0 the parents come out 0777, and under 0o300 the leaf comes
+    out 0400.
+    """
+    kept = os.umask(0)
+    try:
+        deep = tmp_path / "one" / "two" / "three" / "randostats.db"
+        Store(deep).close()
+        for made in (tmp_path / "one", tmp_path / "one" / "two", deep.parent):
+            mode = stat.S_IMODE(made.stat().st_mode)
+            assert not mode & 0o077, f"{made.name} is {oct(mode)}: another account can write in it"
+        assert not stat.S_IMODE(deep.stat().st_mode) & 0o077
+
+        # A umask that takes the owner's own bits off. Whatever mkdir produced,
+        # what is left behind has to be a directory this app can use.
+        os.umask(0o300)
+        narrow = tmp_path / "narrow" / "randostats.db"
+        Store(narrow).close()
+        mode = stat.S_IMODE(narrow.parent.stat().st_mode)
+        assert mode == 0o700, f"the umask left the directory {oct(mode)} and nothing put the bits back"
+
+        # An ancestor that was already there is still not ours to re-mode -
+        # only the level this process actually creates under it.
+        os.umask(0)
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o755)
+        Store(shared / "mine" / "randostats.db").close()
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o755, "re-moded a directory it did not create"
+        assert stat.S_IMODE((shared / "mine").stat().st_mode) == 0o700
+    finally:
+        os.umask(kept)
+
+
 # -- who is allowed to talk to us -------------------------------------------
 # There is no login: whatever reaches the port reads every message. Both of
 # these came from a page on the internet being able to reach 127.0.0.1.
@@ -834,8 +905,9 @@ def test_a_caller_cannot_choose_the_memo_key(client):
     256 distinct keys clear the memo for everyone.
 
     So each of them has to come from a set this app decides the size of: the
-    gap is quantised, row counts are clamped, and a name the store does not
-    hold is answered without computing or remembering anything.
+    gap is snapped to one the interface offers, row counts are clamped, and a
+    name the store does not hold is answered without computing or remembering
+    anything (which has its own test below - a status code cannot show it).
     """
     made = 250
     rows = [{"contact": f"person {n}", "sender": f"person {n}", "direction": "received",
@@ -848,24 +920,135 @@ def test_a_caller_cannot_choose_the_memo_key(client):
     listed = client.get(f"/api/stats/contacts?limit={made * 10}").json()
     assert len(listed) < made, "a caller's own limit reached the view, and the memo key with it"
 
-    # The gap the answer reports is the gap it used. Two a caller can tell
-    # apart must not be two keys, and rounding must not reach zero.
-    near = [client.get(f"/api/stats/conversations?gap_hours={g}").json()["gap_hours"]
-            for g in ("6.1234", "6.1239")]
-    assert near[0] == near[1], "two gaps a caller can tell apart are two memo keys"
-    assert near[0] != 6.1234, "and the answer has to say which gap it actually used"
-    assert client.get("/api/stats/conversations?gap_hours=0.0001").json()["gap_hours"] > 0, \
-        "rounding must not round a positive gap away to nothing"
+    # The gap is not the caller's to choose either. Rounding it was not a
+    # bound: a tenth of an hour up to `le=24*365` is 87,600 distinct values
+    # against a 256-entry memo, so cycling it cleared the memo on every
+    # request whatever the request's headers said. The answer has to come
+    # back as one of the gaps the interface offers, and nothing a caller
+    # invents may add to that set.
+    gaps = offered_gaps()
+    assert gaps, "the conversation gap select is gone; this bound has no source"
+    # `limit` trims what is charted and is no part of the key, so the probes
+    # below ask for one row each rather than 250 back four hundred times.
+    def gap_used(value):
+        return client.get(f"/api/stats/conversations?gap_hours={value}&limit=1").json()["gap_hours"]
+
+    for wanted in gaps:
+        assert gap_used(wanted) == wanted, f"the interface asks for {wanted} and is answered otherwise"
+    probes = [round(0.05 * n, 2) for n in range(1, 400)] + [6.1234, 6.1239, 0.0001, 8759.9]
+    answered = {gap_used(g) for g in probes}
+    assert answered <= set(gaps), f"a caller reached gaps the app never offers: {sorted(answered - set(gaps))}"
+    assert min(answered) > 0, "a positive gap must not be snapped away to nothing"
+    assert len([k for k in memo(client) if k[1] == "health"]) <= len(gaps), \
+        "400 gaps bought more memo slots than the interface has options"
 
     # A direction that is not one of the two is refused, like its siblings.
     assert client.get("/api/stats/words?direction=made-up").status_code == 400
 
-    # A name nobody has is answered with the empty view, not computed and kept.
+    # A name nobody has is answered without computing or keeping anything;
+    # that half has a test of its own below, because a status code cannot
+    # show it.
     assert client.get("/api/stats/members?contact=person 1").json() != []
-    for path in ("/api/stats/tone?contact=nobody", "/api/stats/emoji?contact=nobody",
-                 "/api/stats/timing?contact=nobody", "/api/stats/misspellings?contact=nobody"):
-        assert client.get(path).status_code == 200, path
     assert client.get("/api/stats/members?contact=nobody").json() == []
+
+
+def test_a_name_the_store_does_not_hold_takes_no_memo_slot(client):
+    """The other half of the memo-key fix, and the half a status code cannot
+    see: `contact` is a free-form string, so an invented one used to walk all
+    250 contacts and then keep the answer under the name the caller made up -
+    256 of those and the memo the user's own tabs were using is cleared.
+
+    `?contact=nobody` answered 200 before the guard existed and answers 200
+    now, so the assertion has to be about the memo, not the status. The same
+    goes for a year `/api/wrapped` has nothing in.
+    """
+    made = 250
+    rows = [{"contact": f"person {n}", "sender": f"person {n}", "direction": "received",
+             "timestamp": "2024-01-01T10:00:00", "text": f"hello {n} \U0001f600 teh wrold"} for n in range(made)]
+    assert client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())},
+                       data={"self_name": "Sam", "fmt": "json"}).status_code == 200
+
+    # The set of real names is itself one entry per import. Warm it first, so
+    # what is counted below is only what the invented names added.
+    client.get("/api/stats/tone?contact=warm-the-name-set")
+    before = set(memo(client))
+
+    for n in range(12):
+        name = f"nobody-{n}"
+        for path in ("tone", "emoji", "timing", "misspellings", "members"):
+            r = client.get(f"/api/stats/{path}?contact={name}")
+            assert r.status_code == 200, path
+        added = set(memo(client)) - before
+        assert not added, f"{name} bought a memo slot: {sorted(added)}"
+
+    # ...and what it is answered with is the empty view, not somebody else's.
+    assert client.get("/api/stats/members?contact=nobody").json() == []
+    assert client.get("/api/stats/timing?contact=nobody").json()["by_hour"] == []
+    assert client.get("/api/stats/emoji?contact=nobody").json()["total"] == 0
+    assert client.get("/api/stats/misspellings?contact=nobody&direction=received").json()["words_checked"] == 0
+    assert client.get("/api/stats/tone?contact=nobody").json()["by_contact"] == []
+
+    # A real name is still computed and still remembered, on each of the five:
+    # a guard that quietly refused those would leave the same green suite.
+    assert client.get("/api/stats/emoji?contact=person 7").json()["total"] > 0
+    for view in ("tone", "emoji", "timing", "misspellings", "members"):
+        before = set(memo(client))
+        assert client.get(f"/api/stats/{view}?contact=person 9").status_code == 200
+        assert set(memo(client)) - before, f"{view} refused a name the store does hold"
+
+    # /api/wrapped keys on a year, and a year with nothing in it is the empty
+    # card whatever the number - so it need not walk or remember anything.
+    before = set(memo(client))
+    for year in (1999, 2001, 1970, 3000, -5):
+        card = client.get(f"/api/wrapped?year={year}").json()["card"]
+        assert card["empty"] is True, year
+        assert not set(memo(client)) - before, f"the year {year} bought a memo slot"
+    card = client.get("/api/wrapped").json()
+    assert card["years"] == [2024] and not card["card"].get("empty"), "a year that is there must still be built"
+
+
+def test_an_empty_contact_filter_means_everyone_on_every_endpoint(client):
+    """`?contact=` was two different questions depending on where it was sent.
+
+    `stats.emoji_stats` and `stats.misspellings` spell the filter
+    `if contact and ...`, so an empty string meant "no filter"; `stats.timing`
+    spelled it `contact is None`, so it meant "nobody". The unknown-name guard
+    then quietly made it "nobody" everywhere, because "" is not a name the
+    store holds. One rule, decided once at the edge and matched in the stats
+    layer: an empty filter is no filter, exactly as an omitted one is.
+    """
+    rows = [{"contact": "Alex", "sender": "Alex", "direction": "received",
+             "timestamp": "2024-01-01T10:00:00", "text": "hi teh wrold \U0001f600"},
+            {"contact": "Alex", "sender": "Sam", "direction": "sent",
+             "timestamp": "2024-01-01T10:05:00", "text": "yeh definately \U0001f60a"}]
+    assert client.post("/api/import", files={"file": ("m.json", json.dumps(rows).encode())},
+                       data={"self_name": "Sam", "fmt": "json"}).status_code == 200
+
+    for path in ("/api/stats/emoji", "/api/stats/tone", "/api/stats/timing",
+                 "/api/stats/misspellings?direction=received"):
+        joiner = "&" if "?" in path else "?"
+        empty = client.get(f"{path}{joiner}contact=").json()
+        assert empty == client.get(path).json(), f"{path} reads an empty filter as a filter"
+    # Non-trivially so: the corpus these are being asked about is not empty.
+    assert client.get("/api/stats/emoji?contact=").json()["total"] > 0
+
+    # And it is not a second memo key for the view that no contact at all
+    # already has.
+    client.get("/api/stats/tone")
+    before = set(memo(client))
+    client.get("/api/stats/tone?contact=")
+    assert not set(memo(client)) - before, "an empty filter minted a key of its own"
+
+    # The stats layer says the same thing when it is called directly, so this
+    # does not depend on the API layer normalising for it.
+    msgs = [Message(contact="Alex", sender="Alex", direction="received",
+                    timestamp=datetime(2024, 1, 1, 10, 0), text="hi \U0001f600", source="json")]
+    assert stats.timing(msgs, contact="") == stats.timing(msgs)
+    assert stats.emoji_stats(msgs, contact="") == stats.emoji_stats(msgs)
+    assert stats.tone(msgs, contact="") == stats.tone(msgs)
+    # The one exception, and it is one on purpose: a per-conversation
+    # breakdown has no "everyone" to fall back on.
+    assert stats.group_members(msgs, "") == []
 
 
 def test_a_refused_request_still_carries_the_security_headers(client):
@@ -879,17 +1062,24 @@ def test_a_500_carries_them_too(tmp_path):
     so the header middleware is *inside* the 500 handler and had already
     unwound by the time a crash became a response.
 
-    Nothing in the shipped API renders a user string into a 500 today, so this
-    pins the second line of defence for the handler that one day does.
+    The missing headers were the whole of that gap. The body was never the
+    problem: with debug off - FastAPI's default - Starlette answers a crash
+    with the fixed string "Internal Server Error" and none of the exception,
+    so nothing leaked and the commit message that said otherwise was wrong.
+    What the last assertion pins is *this* app's handler, the one that
+    replaced that string: the exception is in easy reach of it, and writing
+    `repr(exc)` into the detail while debugging is a natural thing to do.
+    The route below puts a string the caller chose inside the exception so
+    that assertion has both halves to bite on.
     """
     app = create_app(tmp_path / "boom.db", use_llm=False)
 
     @app.get("/boom")
-    def boom():
-        raise RuntimeError("kaboom")
+    def boom(note: str = ""):
+        raise RuntimeError(f"kaboom {note}")
 
     with TestClient(app, base_url=LOCAL, raise_server_exceptions=False) as c:
-        r = c.get("/boom")
+        r = c.get("/boom?note=marmalade")
         assert r.status_code == 500
         # The same three the middleware sets, asserted against a response that
         # did go through it rather than against a list written out twice.
@@ -897,3 +1087,4 @@ def test_a_500_carries_them_too(tmp_path):
             if header in ("content-security-policy", "x-content-type-options", "referrer-policy"):
                 assert r.headers.get(header) == value, header
         assert "kaboom" not in r.text, "the crash told the caller about itself"
+        assert "marmalade" not in r.text, "...including the caller's own bytes back again"

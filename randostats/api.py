@@ -63,15 +63,48 @@ MAX_LLM_GROUPS = 4
 # using. The front end asks for fifteen to thirty rows and one of five gap
 # values; bound what reaches the key to roughly that, the way /api/messages
 # already bounds its own limit.
+#
+# This one is a clamp, not a set, so it is the weakest of the three: cycling
+# `limit` still mints one key per value, up to MAX_ROWS for a view (measured:
+# 60 values across /api/stats/words and /api/stats/contacts = 120 keys), which
+# combined across views is more than Derived.LIMIT holds. Closing it properly
+# means computing each view once at the cap and slicing the answer down, which
+# changes what several of them return - worth doing, but not something to
+# smuggle into a security fix. The gap and the contact name, the two the audit
+# measured, are sets and cannot be cycled at all.
 MAX_ROWS = 200
-# Conversation gaps are chosen from a five-entry select. A tenth of an hour is
-# six minutes, which is finer than the question can actually be asked.
-GAP_DECIMALS = 1
+# Conversation gaps are chosen from a five-entry select, and these are the five.
+# Rounding the caller's float was not a bound: a tenth of an hour across
+# `le=24*365` is 87,600 distinct values against a 256-entry memo, so cycling
+# the gap still cleared it on every request. Snapping to a set the app decides
+# the size of means a fresh key cannot be minted at all - and unlike the
+# cross-site check, that holds whatever headers a request carries or omits.
+GAP_CHOICES = (1.0, 3.0, 6.0, 12.0, 24.0)
 
 
 def _rows(limit: int | None) -> int | None:
     """A row count that came from outside, bounded to something sane."""
     return None if limit is None else max(1, min(limit, MAX_ROWS))
+
+
+def _gap(hours: float) -> float:
+    """The gap this app offers that is nearest the one that was asked for."""
+    return min(GAP_CHOICES, key=lambda choice: (abs(choice - hours), choice))
+
+
+def _contact(contact: str | None) -> str | None:
+    """An empty ``?contact=`` means everyone, exactly as an omitted one does.
+
+    Every optional filter in stats.py is spelled ``if contact and ...``, so an
+    empty string has always meant "no filter" down there; `stats.timing` now
+    agrees with the rest. Deciding it here as well keeps the answer from
+    depending on which endpoint was asked, and keeps ``?contact=`` from being
+    a second memo key for the view that no contact at all already has.
+    ``/api/stats/members`` is the exception on purpose: it is a breakdown of
+    one conversation, and the empty string names no conversation, so it goes
+    through `known_contact` and comes back empty.
+    """
+    return contact or None
 
 
 def _too_large(limit: int) -> str:
@@ -170,6 +203,17 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         origin = request.headers.get("origin")
         cross_site = (site is not None and site not in ("same-origin", "none")) or \
                      (origin is not None and _netloc(origin) != _netloc(host))
+        # A request that names no site at all is treated as first-party, which
+        # is what keeps curl, `randostats import` and any other local script
+        # working. A browser is not obliged to name one: Fetch attaches an
+        # Origin to a GET only when the response tainting is cors, so a
+        # cross-origin `fetch(url, {mode: "no-cors"})` carries none, and a
+        # browser without Fetch Metadata (Firefox < 90, Safari < 16.4) sends
+        # no Sec-Fetch-Site either. On those the check below never fires. It
+        # is therefore the cheap half of the defence, not the whole of it:
+        # what bounds the work a stranger can ask for is that every expensive
+        # view keys its memo on a value this app chose (MAX_ROWS,
+        # GAP_CHOICES, known_contact), which no header can route around.
         # A cross-site *read* of the JSON API is not something the front end
         # ever makes, and the page that makes it cannot read the reply either
         # - there are no CORS headers. It can still make this machine do the
@@ -356,6 +400,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     @app.get("/api/stats/timing")
     def timing(contact: str | None = None):
+        contact = _contact(contact)
         if not known_contact(contact):
             return stats.timing([], contact=contact)
         return remember("timing", lambda: stats.timing(messages(), contact=contact), contact=contact)
@@ -381,13 +426,13 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                       limit: int | None = Query(None, ge=1, le=1000)):
         # An unbounded float here reached timedelta(hours=inf), which is an
         # OverflowError and a 500; "nan" is a ValueError one line later, and
-        # both are unencodable in the JSON response besides. Rounding is the
-        # other half: bounded or not, a float the caller picks freely is an
-        # unbounded supply of memo keys. The answer echoes the value actually
-        # used, so a caller that asked for more precision can see it did not
-        # get it, and the floor keeps a gap of 0.0001 h from rounding away to
-        # nothing and walking straight past `gt=0`.
-        gap_hours = max(round(gap_hours, GAP_DECIMALS), 10 ** -GAP_DECIMALS)
+        # both are unencodable in the JSON response besides - so the bounds on
+        # Query stay. Snapping is the other half: bounded or not, a float the
+        # caller picks freely is an unbounded supply of memo keys, and there
+        # are exactly five gaps this app knows how to be asked about. The
+        # answer echoes the gap actually used, so a caller who asked for
+        # something finer can see they did not get it.
+        gap_hours = _gap(gap_hours)
         rows = remember("health", lambda: stats.conversation_health(messages(), gap_hours=gap_hours), gap=gap_hours)
         # The summary always covers everyone; `limit` only trims what is charted.
         return {"gap_hours": gap_hours, "summary": stats.conversation_summary(rows), "rows": rows[:limit] if limit else rows}
@@ -403,6 +448,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         if direction not in ("sent", "received"):
             raise HTTPException(400, "direction must be sent or received")
         limit = _rows(limit)
+        contact = _contact(contact)
         if not known_contact(contact):
             return stats.misspellings([], speller(), direction=direction, limit=limit, contact=contact)
         return remember("misspellings", lambda: stats.misspellings(messages(), speller(), direction=direction,
@@ -412,6 +458,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     @app.get("/api/stats/emoji")
     def emoji(limit: int = 30, contact: str | None = None):
         limit = _rows(limit)
+        contact = _contact(contact)
         if not known_contact(contact):
             return stats.emoji_stats([], limit=limit, contact=contact)
         return remember("emoji", lambda: stats.emoji_stats(messages(), limit=limit, contact=contact),
@@ -419,6 +466,7 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     @app.get("/api/stats/tone")
     def tone(contact: str | None = None):
+        contact = _contact(contact)
         if not known_contact(contact):
             return stats.tone([], contact=contact)
         return remember("tone", lambda: stats.tone(messages(), contact=contact), contact=contact)
@@ -518,6 +566,10 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                 "voice": cp["engine"].voice["id"], "facts": len(cp["engine"].facts)}
 
     app.state.store = store
+    # The memo is the thing a caller must not be able to fill or evict, so the
+    # tests assert on it directly rather than on a status code that looks the
+    # same either way.
+    app.state.derived = derived
     return app
 
 

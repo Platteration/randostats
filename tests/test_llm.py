@@ -8,6 +8,8 @@ have must end in None, never an exception that fails the request.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from collections import deque
 from types import SimpleNamespace
 
@@ -244,6 +246,34 @@ def test_many_requests_cannot_spend_without_limit(monkeypatch, counterpoints):
     # Past it the caller is not failed, only unsharpened.
     assert all(g is not None for g in got[:ceiling])
     assert all(g is None for g in got[ceiling:])
+
+
+def test_the_ceiling_is_reported_once_a_window_not_once_a_call(monkeypatch, counterpoints, caplog):
+    """Bounding the bill must not hand the same caller an unbounded log.
+
+    Every refused call wrote a WARNING, and a refused call is free: four lines
+    per POST, for as long as whoever reached the port keeps posting, and with
+    no logging configured that is a stderr the operator is usually
+    redirecting to a file. The operator needs to know the ceiling was
+    reached, not how many times.
+    """
+    monkeypatch.setattr(llm, "MAX_CALLS_PER_HOUR", 0)
+    monkeypatch.setattr(llm, "_calls", deque())
+    monkeypatch.setattr(llm, "_warned_at", float("-inf"))
+    refused = 25
+
+    with caplog.at_level(logging.WARNING, logger=llm.__name__):
+        for _ in range(refused):
+            assert llm.sharpen("70% of people drink beer", counterpoints) is None
+        said = [r for r in caplog.records if "over" in r.getMessage()]
+        assert len(said) == 1, f"{refused} refusals wrote {len(said)} lines"
+        assert str(llm.MAX_CALLS_PER_HOUR) in said[0].getMessage(), "and it has to say what the ceiling is"
+
+        # Once a window, though, not once ever: an hour later the operator is
+        # told again, or a ceiling reached every day looks like a one-off.
+        monkeypatch.setattr(llm, "_warned_at", time.monotonic() - llm._WINDOW_SECONDS - 1)
+        assert llm.sharpen("70% of people drink beer", counterpoints) is None
+        assert len([r for r in caplog.records if "over" in r.getMessage()]) == 2
 
 
 def test_the_paid_call_cannot_hold_a_worker_thread_for_ten_minutes(monkeypatch, counterpoints):

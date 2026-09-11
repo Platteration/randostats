@@ -62,21 +62,44 @@ def _private(path: Path, mode: int) -> None:
         pass
 
 
+def _make_private_dirs(path: Path) -> None:
+    """Create ``path``, and any missing parent of it, private to this account.
+
+    Two things stop ``mkdir(parents=True, mode=0o700)`` from doing this on its
+    own. The mode is masked by the umask, which only ever *clears* bits - so
+    it cannot widen a directory, but a umask like 0300 leaves the leaf 0400
+    and the app unable to write in it. And ``parents=True`` does not apply the
+    mode to the parents at all: Path.mkdir documents that missing parents "are
+    created with the default permissions without taking mode into account", so
+    a --db two new levels deep left the upper one at whatever the umask said -
+    0777 under a umask of 0, which lets another account rename the 0700
+    directory out from under the database. So each level is created and then
+    chmod-ed here, and the claim that this app's own directories are 0700
+    holds for every one of them and for every umask.
+
+    Only directories this process creates are touched. One that was already
+    there - /tmp, a home directory, a symlink someone else owns - is left
+    exactly as it is: mkdir raises FileExistsError and no chmod follows.
+    """
+    missing = []
+    probe = path
+    while not probe.exists() and probe.parent != probe:
+        missing.append(probe)
+        probe = probe.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:  # already there (a symlink, or a race); not ours to re-mode
+            continue
+        _private(directory, 0o700)
+
+
 class Store:
     def __init__(self, path: Path | str = DEFAULT_DB):
         self.path = Path(path)
         on_disk = str(self.path) != ":memory:"
         if on_disk:
-            try:
-                # mkdir's mode is masked by the umask, so it is set again below.
-                self.path.parent.mkdir(parents=True, mode=0o700)
-            except FileExistsError:
-                # Only the directory this process creates is narrowed. A --db
-                # pointing into a directory that was already there - /tmp, or
-                # a home directory - is not ours to change the mode of.
-                pass
-            else:
-                _private(self.path.parent, 0o700)
+            _make_private_dirs(self.path.parent)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # The API serves requests from a thread pool and shares one connection.

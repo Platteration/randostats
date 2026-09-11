@@ -37,6 +37,14 @@ MAX_CALLS_PER_HOUR = int(os.environ.get("RANDOSTATS_LLM_CALLS_PER_HOUR", "200"))
 _WINDOW_SECONDS = 3600.0
 _calls: deque[float] = deque()
 _calls_lock = threading.Lock()
+# When the operator was last told the ceiling had been reached. Every refused
+# call used to write its own warning, which handed the same caller the ceiling
+# exists to stop an unbounded log instead of an unbounded bill - four lines per
+# POST, for free, for as long as they keep posting, and with no logging
+# configured the root logger's lastResort handler writes them to a stderr that
+# is usually a file. The operator needs to know the ceiling was reached, not
+# how many times, so it is said once per window.
+_warned_at: float = float("-inf")
 
 # The SDK's own default is ten minutes, and `counterpoint` is a sync endpoint,
 # so a stalled call holds an anyio worker thread for all of it. Forty of them
@@ -44,16 +52,25 @@ _calls_lock = threading.Lock()
 TIMEOUT_SECONDS = 20
 
 
-def _claim_a_call() -> bool:
-    """Take a slot from the rolling hour, or report that it is spent."""
+def _claim_a_call() -> tuple[bool, bool]:
+    """Take a slot from the rolling hour, or report that it is spent.
+
+    Returns ``(granted, say_so)``; ``say_so`` is true for the first refusal in
+    a window and false for the rest of it, so a refused caller cannot make
+    this write log lines on demand (see ``_warned_at``).
+    """
+    global _warned_at
     now = time.monotonic()
     with _calls_lock:
         while _calls and now - _calls[0] >= _WINDOW_SECONDS:
             _calls.popleft()
         if len(_calls) >= MAX_CALLS_PER_HOUR:
-            return False
+            say_so = now - _warned_at >= _WINDOW_SECONDS
+            if say_so:
+                _warned_at = now
+            return False, say_so
         _calls.append(now)
-        return True
+        return True, False
 
 
 _client = None
@@ -132,11 +149,14 @@ def sharpen(claim_text: str, counterpoints: list["Counterpoint"]) -> dict | None
     """
     if not counterpoints:
         return None
-    if not _claim_a_call():
+    granted, say_so = _claim_a_call()
+    if not granted:
         # Falling back is already what a missing credential or a network blip
         # does, and the rule-based punchline is on screen either way.
-        log.warning("Claude rebuttals are over %d calls in the last hour; keeping the rule-based one "
-                    "(raise RANDOSTATS_LLM_CALLS_PER_HOUR if that is wrong)", MAX_CALLS_PER_HOUR)
+        if say_so:
+            log.warning("Claude rebuttals are over %d calls in the last hour; keeping the rule-based one "
+                        "(raise RANDOSTATS_LLM_CALLS_PER_HOUR if that is wrong). Saying so once an hour.",
+                        MAX_CALLS_PER_HOUR)
         return None
 
     facts = "\n".join(
