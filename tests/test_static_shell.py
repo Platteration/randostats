@@ -27,3 +27,12 @@ def test_new_frontend_modules_are_loaded_in_dependency_order():
     app = html.index('/static/app.js')
     overview = html.index('/static/overview.js')
     assert ui < app < overview
+
+
+def test_overview_uses_shared_frontend_core():
+    core = (STATIC / "ui-state.js").read_text(encoding="utf-8")
+    overview = (STATIC / "overview.js").read_text(encoding="utf-8")
+    assert "window.RandoCore" in core
+    assert "window.RandoCore" in overview
+    assert "const api = async" not in overview
+    assert "const make = (" not in overview
