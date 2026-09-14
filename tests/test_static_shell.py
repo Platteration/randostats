@@ -2,7 +2,8 @@ from pathlib import Path
 import re
 
 
-STATIC = Path(__file__).parents[1] / "randostats" / "static"
+ROOT = Path(__file__).parents[1]
+STATIC = ROOT / "randostats" / "static"
 INDEX = STATIC / "index.html"
 
 
@@ -36,3 +37,13 @@ def test_overview_uses_shared_frontend_core():
     assert "window.RandoCore" in overview
     assert "const api = async" not in overview
     assert "const make = (" not in overview
+
+
+def test_repo_polish_docs_and_release_workflow_exist():
+    assert (ROOT / "CONTRIBUTING.md").is_file()
+    release = ROOT / ".github" / "workflows" / "release.yml"
+    assert release.is_file()
+    text = release.read_text(encoding="utf-8")
+    assert 'tags:' in text and '"v*"' in text
+    assert "python -m build" in text
+    assert "upload-artifact@v4" in text
