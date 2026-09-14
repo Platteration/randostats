@@ -1,10 +1,9 @@
 /* High-level dashboard for the desktop app. Kept separate from chart internals. */
 (() => {
-  const ui = window.RandoUI;
-  if (!ui) return;
+  const core = window.RandoCore;
+  if (!core) return;
 
-  const $ = (selector, root = document) => root.querySelector(selector);
-  const fmt = (value) => Number(value || 0).toLocaleString();
+  const { $, api, fmt, make, openTab } = core;
   const pct = (value) => value == null ? "—" : `${Math.round(Number(value) * 100)}%`;
   const mins = (value) => {
     if (value == null) return "—";
@@ -12,13 +11,6 @@
     if (n < 60) return `${Math.round(n)} min`;
     if (n < 1440) return `${(n / 60).toFixed(1)} h`;
     return `${(n / 1440).toFixed(1)} d`;
-  };
-
-  const make = (tag, className, text) => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text != null) node.textContent = text;
-    return node;
   };
 
   const metric = (label, value, detail = "") => {
@@ -35,9 +27,8 @@
     button.append(make("span", "insight-title", title));
     button.append(make("span", "insight-copy", copy));
     if (target) {
-      const cue = make("span", "insight-cue", "Open view →");
-      button.append(cue);
-      button.addEventListener("click", () => $(`.tabs button[data-tab="${target}"]`)?.click());
+      button.append(make("span", "insight-cue", "Open view →"));
+      button.addEventListener("click", () => openTab(target));
     }
     return button;
   };
@@ -53,12 +44,12 @@
     const sample = make("button", "primary", "Try sample data");
     sample.type = "button";
     sample.addEventListener("click", () => {
-      $(`.tabs button[data-tab="import"]`)?.click();
+      openTab("import");
       setTimeout(() => $("#load-sample")?.click(), 0);
     });
     const importButton = make("button", "ghost", "Import my messages");
     importButton.type = "button";
-    importButton.addEventListener("click", () => $(`.tabs button[data-tab="import"]`)?.click());
+    importButton.addEventListener("click", () => openTab("import"));
     actions.append(sample, importButton);
     hero.append(actions);
 
@@ -72,19 +63,19 @@
   async function renderOverview() {
     const root = $("#overview-content");
     if (!root) return;
-    ui.loading(root, "Building a quick read from your imported messages…");
+    core.loading(root, "Building a quick read from your imported messages…");
     try {
-      const status = await ui.api("/api/status");
+      const status = await api("/api/status");
       if (!status.messages) {
         firstRun(root);
         return;
       }
 
       const [overview, contacts, timing, conversations] = await Promise.all([
-        ui.api("/api/stats/overview"),
-        ui.api("/api/stats/contacts"),
-        ui.api("/api/stats/timing"),
-        ui.api("/api/stats/conversations?gap_hours=6"),
+        api("/api/stats/overview"),
+        api("/api/stats/contacts"),
+        api("/api/stats/timing"),
+        api("/api/stats/conversations?gap_hours=6"),
       ]);
 
       root.replaceChildren();
@@ -147,13 +138,13 @@
       ].forEach(([label, tab]) => {
         const button = make("button", "ghost", label);
         button.type = "button";
-        button.addEventListener("click", () => $(`.tabs button[data-tab="${tab}"]`)?.click());
+        button.addEventListener("click", () => openTab(tab));
         row.append(button);
       });
       shortcuts.append(row);
       root.append(shortcuts);
     } catch (err) {
-      ui.error(root, err, "Could not build the overview");
+      core.error(root, err, "Could not build the overview");
     }
   }
 
