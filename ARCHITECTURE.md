@@ -19,14 +19,16 @@ The desktop shell is `randostats/static/index.html`.
 The long-lived chart implementation remains in `app.js` for now. New standalone surfaces should not automatically be added there.
 
 - `app.js`: existing charts, drill-down, tab mechanics, import flow, Counterpoint desktop UI.
-- `ui-state.js`: shared API/error/loading/empty-state helpers for newer modules.
-- `overview.js`: high-level dashboard and deterministic insight summaries.
+- `ui-state.js`: shared browser core exposed as `window.RandoCore` — query helpers, API requests, DOM construction, formatting, tab navigation, and loading/empty/error states. `window.RandoUI` remains as a compatibility alias while the extraction is in progress.
+- `overview.js`: high-level dashboard and deterministic insight summaries; it consumes `RandoCore` rather than defining its own API or DOM helpers.
 - `app.css`: established design tokens and chart/application styles.
 - `spruce.css`: additive layout/polish layer for newer surfaces. Prefer moving stable rules into `app.css` only when there is a reason to touch the base stylesheet.
 
 ### Frontend rule of thumb
 
-A new feature belongs in its own file when it has its own data-loading lifecycle or can render independently of the hand-drawn chart primitives. Reuse `RandoUI` for request and view-state behavior instead of inventing another error/loading convention.
+A new feature belongs in its own file when it has its own data-loading lifecycle or can render independently of the hand-drawn chart primitives. Reuse `RandoCore` for request, DOM, navigation, and view-state behavior instead of inventing parallel helpers.
+
+The next safe extraction target is code in `app.js` that is both widely reused and behavior-neutral — shared request/state helpers first, then self-contained view domains. Do not split chart primitives merely to make the file count look better; split at boundaries that reduce coupling.
 
 Imported data is untrusted. Prefer `textContent` and DOM construction. If HTML strings are unavoidable, escape every imported value before it reaches `innerHTML`.
 
@@ -36,6 +38,6 @@ Imported data is untrusted. Prefer `textContent` and DOM construction. If HTML s
 
 ## Tests and CI
 
-`pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, and regression cases. CI also asks Node to parse every JavaScript entry point. `tests/test_static_shell.py` guards the no-build-step asset graph so an HTML reference cannot silently point at a missing file.
+`pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, and regression cases. CI also asks Node to parse every JavaScript entry point. `tests/test_static_shell.py` guards the no-build-step asset graph and the module boundary so an HTML reference or shared-core dependency cannot silently regress.
 
 For bug fixes, reproduce the bug in a test first when practical. For frontend-only bugs that are difficult to drive without a browser, keep changes narrow and add a static regression assertion when it can actually catch the failure mode.
