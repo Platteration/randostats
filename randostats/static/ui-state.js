@@ -1,5 +1,8 @@
-/* Shared UI-state helpers for randostats views. Plain JS, no build step. */
+/* Shared browser helpers for randostats views. Plain JS, no build step. */
 (() => {
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const fmt = (value) => Number(value || 0).toLocaleString();
   const escapeHtml = (value) => value == null ? "" : String(value).replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[ch]));
@@ -13,6 +16,15 @@
     return response.json();
   };
 
+  const make = (tag, className = "", text = null) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  };
+
+  const openTab = (name) => $(`.tabs button[data-tab="${name}"]`)?.click();
+
   const clear = (container) => {
     if (container) container.replaceChildren();
   };
@@ -20,20 +32,10 @@
   const state = (container, kind, title, detail = "") => {
     if (!container) return;
     clear(container);
-    const box = document.createElement("div");
-    box.className = `view-state view-state-${kind}`;
-    if (kind === "error") box.setAttribute("role", "alert");
-    else box.setAttribute("role", "status");
-
-    const heading = document.createElement("strong");
-    heading.textContent = title;
-    box.appendChild(heading);
-
-    if (detail) {
-      const copy = document.createElement("span");
-      copy.textContent = detail;
-      box.appendChild(copy);
-    }
+    const box = make("div", `view-state view-state-${kind}`);
+    box.setAttribute("role", kind === "error" ? "alert" : "status");
+    box.appendChild(make("strong", "", title));
+    if (detail) box.appendChild(make("span", "", detail));
     container.appendChild(box);
   };
 
@@ -41,5 +43,8 @@
   const empty = (container, title = "Nothing here yet", detail = "Import some messages to get started.") => state(container, "empty", title, detail);
   const error = (container, err, title = "Could not load this view") => state(container, "error", title, `${err?.message || err}. Try again; the rest of the app is still available.`);
 
-  window.RandoUI = Object.freeze({ api, clear, empty, error, escapeHtml, loading, state });
+  const core = Object.freeze({ $, $$, api, clear, empty, error, escapeHtml, fmt, loading, make, openTab, state });
+  window.RandoCore = core;
+  // Compatibility alias for the first extracted view. New modules should use RandoCore.
+  window.RandoUI = core;
 })();
