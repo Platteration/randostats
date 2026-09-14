@@ -40,4 +40,6 @@ Imported data is untrusted. Prefer `textContent` and DOM construction. If HTML s
 
 `pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, and regression cases. CI also asks Node to parse every JavaScript entry point. `tests/test_static_shell.py` guards the no-build-step asset graph and the module boundary so an HTML reference or shared-core dependency cannot silently regress.
 
+Pushing a `v*` tag runs `.github/workflows/release.yml`. The workflow builds both Python distributions, smoke-tests the wheel in a fresh virtual environment, and uploads the artifacts. It intentionally stops short of publishing them.
+
 For bug fixes, reproduce the bug in a test first when practical. For frontend-only bugs that are difficult to drive without a browser, keep changes narrow and add a static regression assertion when it can actually catch the failure mode.
