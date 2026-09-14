@@ -15,6 +15,7 @@ and never leave it.
 
 | Tab | What you see |
 |---|---|
+| **Overview** | A quick read of your archive: headline counts, top contact, reply rhythm, who starts conversations, peak time, and shortcuts into deeper views. |
 | **People** | Messages per person, split into sent and received, share you wrote, messages per day, who writes the longest messages. |
 | **Conversations** | Who opens conversations and who gets the last word, double texts, longest silences, a reply-time dumbbell of you against them, and a per-member breakdown inside group chats. The silence gap that separates one conversation from the next is yours to set. |
 | **Timing** | Hour-of-day and day-of-week columns, a weekday × hour heatmap, volume per month, median reply time (yours vs theirs), and each person's favourite time to talk. Filter by person. |
@@ -39,8 +40,8 @@ python samples/make_sample.py        # optional: fake data to play with
 randostats serve                     # http://127.0.0.1:8765
 ```
 
-Open the app, go to **Import**, and either click **Load sample data** or import
-your own export (see the help panel on that tab for how to export from each app).
+Open the app, go to **Overview** or **Import**, and either click **Load sample data** or import
+your own export (see the help panel on the Import tab for how to export from each app).
 
 You can also import from the terminal:
 
@@ -183,6 +184,9 @@ year and run the tests, which check the file is well formed.
 pytest            # parsers, stats, counterpoint, API
 ```
 
+For contributor setup, frontend checks, and project conventions, see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 Layout:
 
 ```
@@ -194,7 +198,7 @@ randostats/
   store.py        SQLite persistence (idempotent imports, settings)
   counterpoint/   facts.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
   api.py          FastAPI routes
-  static/         single-page front end, hand-drawn SVG charts, drill-down drawer,
-                  Wrapped card, Web Speech API listening
+  static/         desktop shell, shared frontend core, overview, hand-drawn SVG charts,
+                  drill-down drawer, Wrapped card, Web Speech API listening, phone PWA
 samples/          make_sample.py generates fake exports
 ```
