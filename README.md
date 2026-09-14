@@ -187,6 +187,8 @@ pytest            # parsers, stats, counterpoint, API
 For contributor setup, frontend checks, and project conventions, see
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+Version tags matching `v*` build a wheel and source distribution in GitHub Actions, smoke-test the wheel, and retain the output as a workflow artifact. Publishing remains a deliberate manual step.
+
 Layout:
 
 ```
