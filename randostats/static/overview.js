@@ -148,10 +148,9 @@
     }
   }
 
-  document.addEventListener("click", (event) => {
-    const tab = event.target.closest('.tabs button[data-tab="overview"]');
-    if (tab) renderOverview();
-  });
+  // One owner. switchTab in app.js sets location.hash on every route to a tab (click, arrow
+  // keys, openTab, a pasted link, back/forward), so hashchange sees them all; a click
+  // listener on top of it rendered the tab twice.
   window.addEventListener("hashchange", () => {
     if (location.hash === "#overview") renderOverview();
   });
