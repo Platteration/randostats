@@ -841,6 +841,9 @@
       await refresh(); switchTab("people");
     } catch (err) { $("#import-result").textContent = "Sample not available: " + err.message; }
   });
+  // The Import intro's "Try sample data" is the same action. It was an inline onclick once,
+  // which the CSP's script-src 'self' refuses, so the button did nothing.
+  $("#try-sample").addEventListener("click", () => $("#load-sample").click());
   $("#clear-all").addEventListener("click", async () => {
     if (!confirm("Delete every imported message from the local database?")) return;
     await api("/api/messages", { method: "DELETE" }); $("#import-result").textContent = "Cleared."; await refresh();
