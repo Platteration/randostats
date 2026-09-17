@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>randostats</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/spruce.css">
 </head>
 <body>
 <a href="#main" class="skip">Skip to content</a>
 <header class="top">
   <div class="brand"><span class="logo">%</span> randostats</div>
   <nav class="tabs" role="tablist" aria-label="Views">
+    <button data-tab="overview">Overview</button>
     <button data-tab="people" class="active">People</button>
     <button data-tab="convo">Conversations</button>
     <button data-tab="timing">Timing</button>
@@ -25,6 +27,10 @@
 
 <div id="live" class="sr-only" role="status" aria-live="polite"></div>
 <main id="main" tabindex="-1">
+  <section role="tabpanel" id="tab-overview" class="tab">
+    <div id="overview-content"></div>
+  </section>
+
   <section role="tabpanel" id="tab-people" class="tab active">
     <div class="kpis" id="kpis"></div>
     <div class="card">
@@ -139,8 +145,20 @@
   </section>
 
   <section role="tabpanel" id="tab-import" class="tab">
+    <div class="import-intro">
+      <div class="import-intro-main">
+        <span class="eyebrow">Start here</span>
+        <h1>Bring your messages in. Keep them on your machine.</h1>
+        <p>Pick an export, tell randostats which name is yours, and the app will detect the source when it can. Re-importing the same file is safe.</p>
+      </div>
+      <div class="import-intro-side">
+        <strong>Want to look around first?</strong>
+        <span>Load the bundled fake conversation. It behaves like a real import and can be deleted whenever you want.</span>
+        <button class="ghost" type="button" id="try-sample">Try sample data</button>
+      </div>
+    </div>
     <div class="card">
-      <div class="card-head"><h2>Import messages</h2></div>
+      <div class="card-head"><h2>Import messages</h2><span class="muted">WhatsApp, iMessage, Android SMS, Telegram, Meta, Discord, CSV or JSON</span></div>
       <form id="import-form" class="import-form">
         <label>Your name in the export <input name="self_name" id="self-name" required placeholder="exactly as it appears"></label>
         <label>Format <select name="fmt" id="fmt"><option value="auto">Auto-detect</option><option value="whatsapp">WhatsApp export (.txt)</option><option value="imessage">iMessage chat.db</option><option value="smsbackup">SMS Backup &amp; Restore (.xml)</option><option value="telegram">Telegram export (.json or .zip)</option><option value="discord">Discord package (.zip)</option><option value="meta">Instagram or Messenger (.zip)</option><option value="csv">CSV</option><option value="json">JSON</option></select></label>
@@ -178,6 +196,8 @@
   <div class="drawer-foot"><button class="ghost" id="drawer-more" hidden>Load more</button></div>
 </aside>
 <div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/ui-state.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/overview.js"></script>
 </body>
 </html>

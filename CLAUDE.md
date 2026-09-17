@@ -56,7 +56,9 @@ sharing only the counterpoint API. Deliberately standalone rather than importing
 from `app.js`, which is one closed IIFE. Consequences worth knowing:
 
 - `tests/test_security.py` parameterises its escaping lint over **both** front
-  ends. Each duplicates `esc()`; neither may skip it.
+  ends. Each duplicates `esc()`; neither may skip it. The desktop modules
+  (`overview.js`, `ui-state.js`) are in the same `FRONT_ENDS` list; a new static
+  module goes there too, or the lint never sees it.
 - That lint follows multi-line template literals. It used to check only the line
   the sink was on, which let an unescaped value in a card template pass.
 - The service worker is served from `/sw.js`, not `/static/`, because scope
