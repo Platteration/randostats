@@ -1,5 +1,7 @@
 # randostats
 
+Read AGENTS.md first. It holds the working rules every coding agent follows in this repository; this file adds the notes specific to this project.
+
 Message statistics plus a counterpoint engine that answers a statistic with a
 real, sourced one of the same size and no relevance. See README.md for what it
 does and how to run it. This file is the working context: conventions, and the
