@@ -30,5 +30,7 @@ jobs:
       - name: Check the front end parses
         run: |
           node --check randostats/static/app.js
+          node --check randostats/static/ui-state.js
+          node --check randostats/static/overview.js
           node --check randostats/static/m.js
           node --check randostats/static/m-sw.js
