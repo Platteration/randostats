@@ -19,7 +19,7 @@ The desktop shell is `randostats/static/index.html`.
 The long-lived chart implementation remains in `app.js` for now. New standalone surfaces should not automatically be added there.
 
 - `app.js`: existing charts, drill-down, tab mechanics, import flow, Counterpoint desktop UI.
-- `ui-state.js`: shared browser core exposed as `window.RandoCore` — query helpers, API requests, DOM construction, formatting, tab navigation, and loading/empty/error states. `window.RandoUI` remains as a compatibility alias while the extraction is in progress.
+- `ui-state.js`: shared browser core exposed as `window.RandoCore` — query helpers, API requests, DOM construction, formatting, tab navigation, and loading/empty/error states.
 - `overview.js`: high-level dashboard and deterministic insight summaries; it consumes `RandoCore` rather than defining its own API or DOM helpers.
 - `app.css`: established design tokens and chart/application styles.
 - `spruce.css`: additive layout/polish layer for newer surfaces. Prefer moving stable rules into `app.css` only when there is a reason to touch the base stylesheet.

@@ -12,6 +12,9 @@
     if (n < 1440) return `${(n / 60).toFixed(1)} h`;
     return `${(n / 1440).toFixed(1)} d`;
   };
+  // The Conversations tab's gap select is the one place the gap lives (app.js reads it from
+  // the DOM too), so the two views agree on what counts as one conversation.
+  const gapHours = () => $("#convo-gap")?.value || "6";
 
   const metric = (label, value, detail = "") => {
     const card = make("div", "overview-metric");
@@ -75,7 +78,7 @@
         api("/api/stats/overview"),
         api("/api/stats/contacts"),
         api("/api/stats/timing"),
-        api("/api/stats/conversations?gap_hours=6"),
+        api(`/api/stats/conversations?gap_hours=${gapHours()}`),
       ]);
 
       root.replaceChildren();

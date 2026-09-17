@@ -45,6 +45,4 @@
 
   const core = Object.freeze({ $, $$, api, clear, empty, error, escapeHtml, fmt, loading, make, openTab, state });
   window.RandoCore = core;
-  // Compatibility alias for the first extracted view. New modules should use RandoCore.
-  window.RandoUI = core;
 })();

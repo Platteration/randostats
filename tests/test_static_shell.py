@@ -22,7 +22,13 @@ def test_overview_shell_has_accessible_tab_and_live_region():
     html = INDEX.read_text(encoding="utf-8")
     assert 'data-tab="overview"' in html
     assert 'id="tab-overview"' in html
-    assert 'id="overview-content" aria-live="polite"' in html
+    # The wrapper is not a live region: that announced every metric card and button as it
+    # was inserted. The loading/error box RandoCore.state() builds is the element that
+    # changes, and it carries role="status" (or "alert") itself.
+    assert 'id="overview-content"' in html
+    assert re.search(r'id="overview-content"[^>]*aria-live', html) is None
+    core = (STATIC / "ui-state.js").read_text(encoding="utf-8")
+    assert 'kind === "error" ? "alert" : "status"' in core
 
 
 class _InlineHandlers(HTMLParser):
