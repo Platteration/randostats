@@ -7,7 +7,6 @@ have must end in None, never an exception that fails the request.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections import deque

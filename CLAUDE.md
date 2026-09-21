@@ -49,8 +49,8 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
 
 ## Verifying a change
 
-`pytest -q` covers parsers, stats, engine, API, security and timestamps. For
-anything visual, run the app and look at it:
+`ruff check .` lints; `pytest -q` covers parsers, stats, engine, API, security
+and timestamps. For anything visual, run the app and look at it:
 
 ```bash
 randostats serve            # then load sample data on the Import tab

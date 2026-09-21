@@ -11,7 +11,6 @@ from collections import Counter, defaultdict
 from functools import lru_cache
 from datetime import timedelta
 from statistics import median
-from typing import Iterable
 
 from .models import Message
 

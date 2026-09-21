@@ -595,7 +595,6 @@ def test_a_counterpoint_session_id_has_to_be_one_we_issued(client):
     """Otherwise any client could grow the session map without limit."""
     from randostats.api import MAX_SESSIONS
 
-    app_sessions = None
     made_up = client.post("/api/counterpoint", json={"text": "70% of people", "session": "not-ours"}).json()
     assert made_up["results"], "an unknown id must not break the request"
     again = client.post("/api/counterpoint", json={"text": "70% of people", "session": "not-ours"}).json()

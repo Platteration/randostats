@@ -22,7 +22,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .packs import CORE_PATH as FACTS_PATH, DEFAULT_VOICE, load_facts, load_voice
+from .packs import DEFAULT_VOICE, load_facts, load_voice
 
 # Percentage points within which two figures can fairly be called the same.
 CLOSE_ENOUGH = 3.0

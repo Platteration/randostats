@@ -6,12 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -31,6 +37,8 @@ jobs:
 
       - run: pip install -e ".[${{ matrix.extras }}]"
 
+      - run: ruff check .
+
       - run: pytest -q
 
       # The front end has no build step, so this is the only check that it parses.
@@ -38,6 +46,7 @@ jobs:
 
   packaged:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     name: non-editable install
     # An editable install reads the data files out of the checkout, so it
     # cannot tell whether the packs and voices are in the built package.

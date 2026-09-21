@@ -203,10 +203,11 @@ The database lives at `data/randostats.db` by default; override with `--db` or
 ## Development
 
 ```bash
+ruff check .                         # pyflakes and the pycodestyle errors
 pytest -q                            # parsers, stats, counterpoint, API, security, timestamps
 ```
 
-CI runs the suite on Python 3.10 and 3.12, with and without the `llm` extra,
+CI runs both on Python 3.10 and 3.12, with and without the `llm` extra,
 then installs the built package and runs it from outside the checkout, which
 is the only way to tell that the data files ship.
 
