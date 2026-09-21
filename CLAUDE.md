@@ -12,7 +12,7 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
 `static/` is the whole front end: no build step, no framework, hand-drawn SVG.
 `counterpoint/` holds the engine plus its content as JSON on disk.
 
-## Conventions
+## Project conventions
 
 - **Stats stay pure.** Every function in `stats.py` takes messages and returns
   JSON-serialisable data, so tests and endpoints share them. Filtering and
@@ -59,3 +59,13 @@ python samples/make_sample.py
 
 Chromium and Playwright are available in the cloud sandbox; screenshot the
 tabs in both colour schemes rather than assuming a chart renders.
+
+## Conventions
+
+This repository follows `CONVENTIONS.md`, which is identical in every platteration
+repository and pinned by the conventions test (`npm run test:conventions`, or
+`tests/test_conventions.py` in a Python repository): the script set (`test`,
+`typecheck`, `lint`, `check`, `test:e2e`, `test:all`), Node 22 via `.nvmrc`, one
+`.editorconfig`, ESLint per stack, the `ci.yml` shape, the documents every repository
+carries and the README skeleton. `npm run check` is the gate before a push. To change a
+convention, change it in every repository in one pass and update the hashes in the test.

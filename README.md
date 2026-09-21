@@ -37,73 +37,6 @@ to open the messages behind that number, filtered and searchable. Each person
 keeps the same colour everywhere, assigned once from overall volume so
 filtering never repaints the survivors.
 
-## Quick start
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python samples/make_sample.py        # optional: fake data to play with
-randostats serve                     # http://127.0.0.1:8765
-```
-
-Open the app, go to **Import**, and either click **Load sample data** or import
-your own export (see the help panel on that tab for how to export from each app).
-
-It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses reads and
-writes that a browser tells it came from another site — anything carrying
-`Sec-Fetch-Site: cross-site`, or an `Origin` that is not the name it was asked
-under. A request that says nothing about where it came from is answered: that
-is what keeps `curl` and `randostats import` working, and it is also what an
-older browser sends, since Firefox before 90 and Safari before 16.4 attach no
-`Sec-Fetch-Site` and a `no-cors` GET carries no `Origin` on any browser at
-all. So that check is a latch rather than a wall. What does not depend on it
-is that every memoised view is keyed on a value this app chose rather than on
-whatever arrived — one of the five conversation gaps in the menu, a row count
-clamped to 200, a name the store actually holds — so the cheap trick of
-varying a parameter to make the machine walk your whole history again has
-nothing left to vary but the row count. There is no login, so whatever reaches
-the port can read every message you imported, and a page on the internet can
-point a name it owns at 127.0.0.1 and try. To reach it under another name,
-say which:
-
-```bash
-randostats serve --host 0.0.0.0 --allow-host laptop.lan
-```
-
-Those are not two independent guards. "Another site" is measured against the
-names this server answers to, so a name you add with `--allow-host` is a name
-it trusts completely: any page that can make your browser resolve that name to
-this machine — a hostile router, DNS on the local network, or plain DNS
-rebinding for `'*'` — can then read and delete everything, exactly as the
-front end can. Add a name only on a network where you would accept that.
-
-You can also import from the terminal:
-
-```bash
-randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
-randostats import ~/Library/Messages/chat.db --me "Me"
-randostats import telegram-export.zip --me "Your Name"
-randostats counter "seventy percent of people drink beer"
-```
-
-Where to find each export:
-
-| Source | Where |
-|---|---|
-| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
-| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
-| Android SMS | the "SMS Backup & Restore" app's XML file |
-| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
-| Instagram / Messenger | request your information in JSON, then import the zip |
-| Discord | Settings → Data & Privacy → Request all of my data |
-
-Discord only exports what you wrote, so an import from it shows nothing as
-received. The app says so when it notices, rather than letting you read a
-half-empty chart as a fact about your friends.
-
-The database lives at `data/randostats.db` by default; override with `--db` or
-`RANDOSTATS_DB`.
-
 ## Counterpoint with Claude (optional)
 
 The rule-based engine works offline and always runs. If you want sharper
@@ -200,13 +133,84 @@ statement, a short noun-phrase form for generated sentences, a source, and a
 year. Values are approximate and dated; if you add facts, keep the source and
 year and run the tests, which check the file is well formed.
 
+## Running it
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python samples/make_sample.py        # optional: fake data to play with
+randostats serve                     # http://127.0.0.1:8765
+```
+
+Open the app, go to **Import**, and either click **Load sample data** or import
+your own export (see the help panel on that tab for how to export from each app).
+
+It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses reads and
+writes that a browser tells it came from another site — anything carrying
+`Sec-Fetch-Site: cross-site`, or an `Origin` that is not the name it was asked
+under. A request that says nothing about where it came from is answered: that
+is what keeps `curl` and `randostats import` working, and it is also what an
+older browser sends, since Firefox before 90 and Safari before 16.4 attach no
+`Sec-Fetch-Site` and a `no-cors` GET carries no `Origin` on any browser at
+all. So that check is a latch rather than a wall. What does not depend on it
+is that every memoised view is keyed on a value this app chose rather than on
+whatever arrived — one of the five conversation gaps in the menu, a row count
+clamped to 200, a name the store actually holds — so the cheap trick of
+varying a parameter to make the machine walk your whole history again has
+nothing left to vary but the row count. There is no login, so whatever reaches
+the port can read every message you imported, and a page on the internet can
+point a name it owns at 127.0.0.1 and try. To reach it under another name,
+say which:
+
+```bash
+randostats serve --host 0.0.0.0 --allow-host laptop.lan
+```
+
+Those are not two independent guards. "Another site" is measured against the
+names this server answers to, so a name you add with `--allow-host` is a name
+it trusts completely: any page that can make your browser resolve that name to
+this machine — a hostile router, DNS on the local network, or plain DNS
+rebinding for `'*'` — can then read and delete everything, exactly as the
+front end can. Add a name only on a network where you would accept that.
+
+You can also import from the terminal:
+
+```bash
+randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
+randostats import ~/Library/Messages/chat.db --me "Me"
+randostats import telegram-export.zip --me "Your Name"
+randostats counter "seventy percent of people drink beer"
+```
+
+Where to find each export:
+
+| Source | Where |
+|---|---|
+| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
+| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
+| Android SMS | the "SMS Backup & Restore" app's XML file |
+| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
+| Instagram / Messenger | request your information in JSON, then import the zip |
+| Discord | Settings → Data & Privacy → Request all of my data |
+
+Discord only exports what you wrote, so an import from it shows nothing as
+received. The app says so when it notices, rather than letting you read a
+half-empty chart as a fact about your friends.
+
+The database lives at `data/randostats.db` by default; override with `--db` or
+`RANDOSTATS_DB`.
+
 ## Development
 
 ```bash
-pytest            # parsers, stats, counterpoint, API
+pytest -q                            # parsers, stats, counterpoint, API, security, timestamps
 ```
 
-Layout:
+CI runs the suite on Python 3.10 and 3.12, with and without the `llm` extra,
+then installs the built package and runs it from outside the checkout, which
+is the only way to tell that the data files ship.
+
+## Project layout
 
 ```
 randostats/

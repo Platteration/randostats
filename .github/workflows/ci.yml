@@ -1,15 +1,16 @@
-name: tests
+name: CI
 
 on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  pytest:
+  check:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,16 +23,18 @@ jobs:
     name: py${{ matrix.python-version }} [${{ matrix.extras }}]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install
-        run: pip install -e ".[${{ matrix.extras }}]"
-      - name: Run tests
-        run: pytest -q
-      - name: Check the front end parses
-        run: node --check randostats/static/app.js
+
+      - run: pip install -e ".[${{ matrix.extras }}]"
+
+      - run: pytest -q
+
+      # The front end has no build step, so this is the only check that it parses.
+      - run: node --check randostats/static/app.js
 
   packaged:
     runs-on: ubuntu-latest
@@ -40,11 +43,13 @@ jobs:
     # cannot tell whether the packs and voices are in the built package.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
           cache: pip
-      - name: Install the built package
-        run: pip install .
-      - name: Run it from somewhere the checkout is not importable
-        run: cd "$RUNNER_TEMP" && randostats counter "70% of people"
+
+      - run: pip install .
+
+      # Run it from somewhere the checkout is not importable.
+      - run: cd "$RUNNER_TEMP" && randostats counter "70% of people"

@@ -1,13 +1,22 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-data/
-*.db
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
 dist/
 build/
-.env
+
+# project
+data/
+*.db
+
+# editors
+.vscode/
+.idea/
+
+.claude/settings.local.json
 
 # Secrets: ignore every .env variant, but keep the documented template.
 .env*
