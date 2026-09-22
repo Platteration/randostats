@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Update these when the shared file changes — in every repository, in one pass.
 EDITORCONFIG_SHA = "85bccbd23a9070becfe1dc0dbb9ad7305fb2bb98f92f54cb9856d7d6eca4ebfe"
-CONVENTIONS_SHA = "92cbd3f9102b55db0dfc5c32bdb3cca80e3d20bc4d82acce790a51b209716870"
+CONVENTIONS_SHA = "c9e7219a4fa5b425c2331c9eb02bebc364da1a56fd3a5f5fa3f0cf5ce87495f3"
 
 
 def read(path: str) -> str:
