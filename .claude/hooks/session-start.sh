@@ -10,6 +10,16 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 
-# The editable install the README and CI use: the container image is cached after
-# this runs, and pip is a no-op when everything is already current.
-pip install -e ".[dev]"
+# Into .venv, the environment the README sets up, never through the pip on PATH: a
+# Debian or Ubuntu Python 3.12 is marked externally managed (PEP 668) and refuses a
+# bare `pip install`, and under `set -e` that ends the hook with no ruff and no
+# pytest. The container image is cached after this runs; the editable install is
+# cheap but not a no-op (it rebuilds the editable wheel every run), which is why an
+# existing .venv is reused rather than recreated.
+if [ ! -x .venv/bin/pip ]; then
+  python3 -m venv .venv
+fi
+.venv/bin/pip install -e ".[dev]"
+
+# The venv's ruff, pytest and randostats first on PATH for the rest of the session.
+echo "export PATH=\"$PWD/.venv/bin:\$PATH\"" >> "${CLAUDE_ENV_FILE:-/dev/null}"

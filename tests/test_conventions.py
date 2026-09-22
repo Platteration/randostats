@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +60,10 @@ def test_the_check_set():
     for tool in ("pytest", "ruff"):
         assert re.search(rf'"{tool}[">=<~]', dev.group(1)), f"the dev extra installs {tool}"
     assert line(table("tool.pytest.ini_options"), r'^testpaths = \["tests"\]$')
+    # The rule set is spelled out because the pip ruff enables some 400 rules when
+    # none is selected. Pinned here as well: without this, dropping "F" from the list
+    # lets pyflakes stop gating CI while `ruff check .` stays green.
+    assert line(table("tool.ruff.lint"), r'^select = \["E4", "E7", "E9", "F"\]$'), "the pinned rule set"
 
 
 def test_the_ci_workflow_shape():
@@ -103,3 +108,11 @@ def test_the_claude_session_hook():
     settings = json.loads(read(".claude/settings.json"))
     assert settings.get("hooks", {}).get("SessionStart"), "SessionStart hook declared"
     assert has(".claude/hooks/session-start.sh")
+    hook = read(".claude/hooks/session-start.sh")
+    assert line(hook, r'^if \[ "\$\{CLAUDE_CODE_REMOTE:-\}" != "true" \]; then$'), "the hook is remote-only"
+    # It installs into .venv, never through the pip on PATH: a PEP 668-marked Python
+    # refuses a bare `pip install`, and the hook would end with no ruff and no pytest.
+    assert line(hook, r'^\s*python3 -m venv \.venv$'), "the hook creates .venv when it is absent"
+    assert line(hook, r'^\.venv/bin/pip install -e "\.\[dev\]"$'), "the hook installs through .venv"
+    assert not line(hook, r'^\s*pip install'), "no install through the pip on PATH"
+    assert subprocess.run(["bash", "-n", str(ROOT / ".claude/hooks/session-start.sh")]).returncode == 0
