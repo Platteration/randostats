@@ -5,8 +5,16 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  # Weekly, for a tree nobody pushes to: GitHub runs a schedule from the default branch
+  # only, where an advisory or a build that has rotted then shows within a week. Not at
+  # the top of the hour, a high-load time when scheduled runs can be delayed or dropped
+  # (CONVENTIONS.md, "CI").
+  schedule:
+    - cron: "17 6 * * 1"
 
-# A newer push to the same branch supersedes an in-flight run.
+# A newer run for the same ref supersedes an in-flight one. On the default branch the
+# weekly run shares the group with pushes; whichever is cancelled, the other tests the
+# branch's newest commit.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -44,15 +52,20 @@ jobs:
 
       - run: pytest -q
 
+      # The conventions test again, on its own and without pytest, as an npm repository
+      # runs `npm run test:conventions`: no pytest setting can keep it from running here.
+      - run: python tests/test_conventions.py
+
       # The front end has no build step, so this is the only check that it parses.
       - run: node --check randostats/static/app.js
 
-  # A job of its own, so a newly published advisory turns this red and leaves
-  # check meaning what it always meant. It audits what the app is built from twice:
-  # at the newest versions the declared ranges resolve to on the day, and at the
-  # declared floors, which `pip install .` keeps in an environment that already
-  # holds them. A version between a floor and the newest release is audited by
-  # neither, so an advisory against such a version alone leaves this green.
+  # A job of its own, so that a newly published advisory turns this red on the next run
+  # (on the default branch, the weekly one at the latest) and leaves check meaning what
+  # it always meant. It audits what installing the app installs, the llm extra included,
+  # twice: at the newest versions the declared ranges resolve to on the day, and at the
+  # declared floors, which `pip install .` keeps in an environment that already holds
+  # them. A version between a floor and the newest release is audited by neither, so an
+  # advisory against such a version alone leaves this green.
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
