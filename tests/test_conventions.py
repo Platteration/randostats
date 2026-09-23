@@ -100,7 +100,8 @@ def test_the_audit_job():
     audit = job(read(".github/workflows/ci.yml"), "audit")
     steps = re.findall(r"^      - run: (.*)$", audit, re.M)
     assert len(steps) == 2, steps
-    assert re.fullmatch(r"pip install pip-audit==\d+\.\d+\.\d+", steps[0]), "a pinned pip-audit"
+    # Pinned with hashes, and its dependencies with it (tests/test_audit.py reads the file).
+    assert steps[0] == "pip install --require-hashes -r .github/audit/requirements.txt", "a pinned pip-audit"
     assert steps[1] == 'pip-audit -r <(echo ".[llm]")', "the runtime dependencies and the llm extra"
     # Each of these would let the job pass with an advisory in hand, or not run at all.
     for escape in ("continue-on-error", "||", "if:"):

@@ -34,6 +34,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          # What setup-python keys the cache on when no requirements.txt exists,
+          # named, since its default glob would otherwise find the audit job's.
+          cache-dependency-path: pyproject.toml
 
       - run: pip install -e ".[${{ matrix.extras }}]"
 
@@ -56,8 +59,17 @@ jobs:
         with:
           python-version-file: .python-version
           cache: pip
+          cache-dependency-path: |
+            .github/audit/requirements.txt
+            pyproject.toml
 
-      - run: pip install pip-audit==2.10.1
+      # pip-audit and everything it runs on, pip included, each pinned with its
+      # hashes: a new release of an unpinned dependency could turn this red on an
+      # unchanged tree and look just like an advisory. requirements.txt is compiled
+      # from requirements.in beside it, and Dependabot's pip entry for that
+      # directory moves both. The throwaway venv `pip-audit -r` resolves into still
+      # gets the newest pip on the day: pip-audit upgrades it there itself.
+      - run: pip install --require-hashes -r .github/audit/requirements.txt
 
       # What the app is built from: the declared dependencies plus the llm extra,
       # resolved into a throwaway venv, and not the dev extra (the test runner and
@@ -78,6 +90,7 @@ jobs:
         with:
           python-version-file: .python-version
           cache: pip
+          cache-dependency-path: pyproject.toml
 
       - run: pip install .
 

@@ -12,6 +12,19 @@ updates:
           - minor
           - patch
 
+  # pip-audit for the audit job, pinned with hashes in .github/audit/requirements.txt.
+  # Neither the entry above nor the github-actions one reads a workflow's `run:`
+  # line, so without this nothing moves that pin. One pull request for the lot.
+  - package-ecosystem: pip
+    directory: /.github/audit
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      audit-tool:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
