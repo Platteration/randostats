@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Update these when the shared file changes — in every repository, in one pass.
 EDITORCONFIG_SHA = "85bccbd23a9070becfe1dc0dbb9ad7305fb2bb98f92f54cb9856d7d6eca4ebfe"
-CONVENTIONS_SHA = "b419b56e1b4a9f0b2fcfc9e957f1798b464918b89141b84fc9cdeac957f1c123"
+CONVENTIONS_SHA = "71699d9ea9d3aa3fa81b91906cd439cb74f1355aba79b33e9652f2906b1a3023"
 
 
 def read(path: str) -> str:
@@ -80,6 +80,15 @@ def test_the_ci_workflow_shape():
     assert line(ci, r"^\s+- run: ruff check \.$"), "CI runs ruff"
     assert line(ci, r"^\s+- run: pytest\b"), "CI runs pytest"
     assert ci.index("run: ruff check .") < ci.index("run: pytest"), "lint before the suite"
+
+
+def test_the_audit_job():
+    """The declared dependencies are audited in a job of their own, so an advisory
+    published against an unchanged tree says so without failing the suite."""
+    ci = read(".github/workflows/ci.yml")
+    assert line(ci, r"^  audit:$"), "the audit is a job of its own"
+    assert re.search(r"pip install pip-audit==\d+\.\d+\.\d+", ci), "a pinned pip-audit"
+    assert line(ci, r"^\s+- run: pip-audit\b"), "CI runs pip-audit"
 
 
 def test_the_documents():

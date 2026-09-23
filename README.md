@@ -209,7 +209,8 @@ pytest -q                            # parsers, stats, counterpoint, API, securi
 
 CI runs both on Python 3.10 and 3.12, with and without the `llm` extra,
 then installs the built package and runs it from outside the checkout, which
-is the only way to tell that the data files ship.
+is the only way to tell that the data files ship; a separate job runs a pinned
+`pip-audit` over the declared dependencies and the `llm` extra.
 
 ## Project layout
 
