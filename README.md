@@ -209,8 +209,13 @@ pytest -q                            # parsers, stats, counterpoint, API, securi
 
 CI runs both on Python 3.10 and 3.12, with and without the `llm` extra,
 then installs the built package and runs it from outside the checkout, which
-is the only way to tell that the data files ship; a separate job runs a pinned
-`pip-audit` over the declared dependencies and the `llm` extra.
+is the only way to tell that the data files ship. A separate job runs
+`pip-audit`, pinned with its dependencies by hash, over the declared
+dependencies and the `llm` extra twice: at the newest versions the ranges in
+`pyproject.toml` resolve to on the day, and at the declared floors
+(`.github/audit/floors.py`), which `pip install .` keeps in an environment
+that already has them. A version between a floor and the newest release is
+audited by neither.
 
 ## Project layout
 

@@ -47,8 +47,12 @@ jobs:
       # The front end has no build step, so this is the only check that it parses.
       - run: node --check randostats/static/app.js
 
-  # A job of its own, so an advisory published against an unchanged tree turns
-  # this red and leaves check meaning what it always meant.
+  # A job of its own, so a newly published advisory turns this red and leaves
+  # check meaning what it always meant. It audits what the app is built from twice:
+  # at the newest versions the declared ranges resolve to on the day, and at the
+  # declared floors, which `pip install .` keeps in an environment that already
+  # holds them. A version between a floor and the newest release is audited by
+  # neither, so an advisory against such a version alone leaves this green.
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -71,11 +75,18 @@ jobs:
       # gets the newest pip on the day: pip-audit upgrades it there itself.
       - run: pip install --require-hashes -r .github/audit/requirements.txt
 
-      # What the app is built from: the declared dependencies plus the llm extra,
-      # resolved into a throwaway venv, and not the dev extra (the test runner and
-      # the linter). `pip-audit .` would read [project] dependencies alone and miss
-      # the extra. randostats itself is listed as skipped: it is not on PyPI.
+      # The newest: the declared dependencies plus the llm extra, resolved into a
+      # throwaway venv, and not the dev extra (the test runner and the linter).
+      # `pip-audit .` would read [project] dependencies alone and miss the extra.
+      # randostats itself is listed as skipped: it is not on PyPI.
       - run: pip-audit -r <(echo ".[llm]")
+
+      # The floors: every `>=` of the same requirements read as `==` by floors.py,
+      # with pip resolving everything else around them. A floor with an advisory,
+      # or floors that cannot be installed together, turn this red. `&&`, not a
+      # pipe or `<(...)`, whose exit status nothing reads: pip-audit passes an
+      # empty list, so a floors.py that fails has to fail the step.
+      - run: python .github/audit/floors.py > "$RUNNER_TEMP/floors.txt" && pip-audit -r "$RUNNER_TEMP/floors.txt"
 
   packaged:
     runs-on: ubuntu-latest

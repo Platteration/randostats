@@ -5,12 +5,19 @@ description = "Statistics on your sent and received messages, plus a live counte
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
+# The audit job audits these floors as well as the newest releases
+# (.github/audit/floors.py), so each floor must be free of known advisories and
+# installable with the others. python-multipart 0.0.31 and starlette 1.3.1 are the
+# first releases clear of the advisories against earlier ones; fastapi 0.133 is the
+# first that allows starlette 1.x, and pydantic 2.7 the oldest that fastapi accepts.
+# starlette is declared because api.py imports it.
 dependencies = [
-    "fastapi>=0.110",
+    "fastapi>=0.133",
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.27",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.31",
     "pyspellchecker>=0.8",
-    "pydantic>=2",
+    "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]

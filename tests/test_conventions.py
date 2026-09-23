@@ -91,7 +91,9 @@ def job(ci: str, name: str) -> str:
 
 def test_the_audit_job():
     """The declared dependencies are audited in a job of their own, so an advisory
-    published against an unchanged tree says so without failing the suite.
+    published against an unchanged tree says so without failing the suite: at the
+    newest versions the ranges resolve to, and at the declared floors
+    (tests/test_audit.py reads floors.py).
 
     Read inside the job's own block and as whole step lines: a search over the file
     passed a bare `pip-audit` (which audits the runner's own tools), `pip-audit .`
@@ -99,10 +101,14 @@ def test_the_audit_job():
     pinned text was left in a comment."""
     audit = job(read(".github/workflows/ci.yml"), "audit")
     steps = re.findall(r"^      - run: (.*)$", audit, re.M)
-    assert len(steps) == 2, steps
+    assert len(steps) == 3, steps
     # Pinned with hashes, and its dependencies with it (tests/test_audit.py reads the file).
     assert steps[0] == "pip install --require-hashes -r .github/audit/requirements.txt", "a pinned pip-audit"
     assert steps[1] == 'pip-audit -r <(echo ".[llm]")', "the runtime dependencies and the llm extra"
+    # `&&`: pip-audit passes an empty list, and nothing reads the status of a `<(...)`.
+    assert steps[2] == (
+        'python .github/audit/floors.py > "$RUNNER_TEMP/floors.txt" && pip-audit -r "$RUNNER_TEMP/floors.txt"'
+    ), "the same requirements at their floors"
     # Each of these would let the job pass with an advisory in hand, or not run at all.
     for escape in ("continue-on-error", "||", "if:"):
         assert escape not in audit, f"nothing in the audit job lets a finding through: {escape}"
