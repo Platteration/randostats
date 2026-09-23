@@ -82,13 +82,29 @@ def test_the_ci_workflow_shape():
     assert ci.index("run: ruff check .") < ci.index("run: pytest"), "lint before the suite"
 
 
+def job(ci: str, name: str) -> str:
+    """One job's block of ci.yml: from `  name:` up to the next line at that indent."""
+    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", ci, re.M | re.S)
+    assert match, f"ci.yml has a {name} job"
+    return match.group(1)
+
+
 def test_the_audit_job():
     """The declared dependencies are audited in a job of their own, so an advisory
-    published against an unchanged tree says so without failing the suite."""
-    ci = read(".github/workflows/ci.yml")
-    assert line(ci, r"^  audit:$"), "the audit is a job of its own"
-    assert re.search(r"pip install pip-audit==\d+\.\d+\.\d+", ci), "a pinned pip-audit"
-    assert line(ci, r"^\s+- run: pip-audit\b"), "CI runs pip-audit"
+    published against an unchanged tree says so without failing the suite.
+
+    Read inside the job's own block and as whole step lines: a search over the file
+    passed a bare `pip-audit` (which audits the runner's own tools), `pip-audit .`
+    (no llm extra), the dev extra, a `|| true`, and an unpinned install whose old
+    pinned text was left in a comment."""
+    audit = job(read(".github/workflows/ci.yml"), "audit")
+    steps = re.findall(r"^      - run: (.*)$", audit, re.M)
+    assert len(steps) == 2, steps
+    assert re.fullmatch(r"pip install pip-audit==\d+\.\d+\.\d+", steps[0]), "a pinned pip-audit"
+    assert steps[1] == 'pip-audit -r <(echo ".[llm]")', "the runtime dependencies and the llm extra"
+    # Each of these would let the job pass with an advisory in hand, or not run at all.
+    for escape in ("continue-on-error", "||", "if:"):
+        assert escape not in audit, f"nothing in the audit job lets a finding through: {escape}"
 
 
 def test_the_documents():
