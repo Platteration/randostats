@@ -13,6 +13,7 @@
   --line: rgba(255, 255, 255, 0.12);
   --accent: #3987e5;
   --warm: #d95926;
+  --danger: #e66767;
   --radius: 16px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -31,6 +32,7 @@
     --line: rgba(11, 11, 11, 0.12);
     --accent: #2a78d6;
     --warm: #eb6834;
+    --danger: #d03b3b;
   }
 }
 
@@ -100,6 +102,15 @@ main {
 .card .gap b { color: var(--ink); }
 .card .actions { display: flex; gap: 8px; margin-top: 16px; }
 .card.empty-state { border-left-color: var(--muted); }
+/* Verdicts: the answer that isn't a joke. Colour marks the kind; the label says it in words. */
+.card.verdict.check { border-left-color: var(--accent); }
+.card.verdict.myth { border-left-color: var(--danger); }
+.card.verdict.appeal { border-left-color: var(--muted); }
+.card .label {
+  display: inline-block; margin-right: 8px; padding: 2px 8px; border-radius: 999px;
+  background: var(--raised); color: var(--ink); font-weight: 600; letter-spacing: .04em;
+}
+.card.verdict .punch { font-size: 24px; font-weight: 700; }
 
 /* ---------- compose bar, pinned in thumb reach ---------- */
 .compose {

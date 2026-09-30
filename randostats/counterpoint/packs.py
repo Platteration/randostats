@@ -18,6 +18,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 CORE_PATH = HERE / "facts.json"
+MYTHS_PATH = HERE / "myths.json"
 PACK_DIR = HERE / "packs"
 VOICE_DIR = HERE / "voices"
 DEFAULT_VOICE = "house"
@@ -35,11 +36,13 @@ def locked_ids() -> set[str]:
 def _packs() -> dict[str, dict]:
     core = _read(CORE_PATH)
     packs = {"core": {"id": "core", "name": "Core", "description": "The house set: planet, body, people, space.",
-                      "facts": core["facts"], "always_on": True}}
+                      "facts": core["facts"], "myths": _read(MYTHS_PATH)["myths"], "always_on": True}}
     for path in sorted(PACK_DIR.glob("*.json")):
         data = _read(path)
+        # A pack may carry myths as well as facts, or only myths.
         packs[data["id"]] = {"id": data["id"], "name": data.get("name", data["id"]),
-                             "description": data.get("description", ""), "facts": data["facts"], "always_on": False}
+                             "description": data.get("description", ""), "facts": data.get("facts", []),
+                             "myths": data.get("myths", []), "always_on": False}
     return packs
 
 
@@ -76,17 +79,27 @@ def list_packs(enabled: set[str] | None = None) -> list[dict]:
     return out
 
 
-def load_facts(packs: set[str] | None = None) -> list[dict]:
-    """Core facts plus the facts of every enabled, unlocked pack, deduped by id."""
+def _load(field: str, packs: set[str] | None) -> list[dict]:
     locked = locked_ids()
     chosen = {"core"} | {p for p in (packs or set()) if p not in locked}
-    facts: dict[str, dict] = {}
+    items: dict[str, dict] = {}
     for pack in _packs().values():
         if pack["id"] not in chosen:
             continue
-        for fact in pack["facts"]:
-            facts.setdefault(fact["id"], {**fact, "pack": pack["id"]})
-    return list(facts.values())
+        for item in pack[field]:
+            items.setdefault(item["id"], {**item, "pack": pack["id"]})
+    return list(items.values())
+
+
+def load_facts(packs: set[str] | None = None) -> list[dict]:
+    """Core facts plus the facts of every enabled, unlocked pack, deduped by id."""
+    return _load("facts", packs)
+
+
+def load_myths(packs: set[str] | None = None) -> list[dict]:
+    """Core myths plus those of every enabled, unlocked pack. Kept apart from
+    facts: a myth is never offered as a parallel, only ever refuted."""
+    return _load("myths", packs)
 
 
 def list_voices() -> list[dict]:
@@ -103,5 +116,7 @@ def load_voice(voice_id: str = DEFAULT_VOICE) -> dict:
     voice = voices.get(voice_id) or house
     # A voice may leave any list out; the house lines fill the gap.
     return {key: voice.get(key) or house.get(key, []) for key in
-            ("percent", "percent_close", "ratio", "fallacy_percent", "fallacy_vague", "fallacy_ratio")
+            ("percent", "percent_close", "ratio", "fallacy_percent", "fallacy_vague", "fallacy_ratio",
+             "fallacy_change", "fallacy_myth", "appeal_authority", "appeal_popularity", "appeal_proof",
+             "appeal_count")
             } | {"id": voice["id"], "name": voice.get("name", voice["id"])}

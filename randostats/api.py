@@ -276,8 +276,9 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) ->
         # Only ids we issued are honoured, so a client cannot grow this map.
         session = req.session
         seen = sessions.get(session) if session else None
-        results = cp["engine"].respond(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
-        payload = {"session": session, "results": [r.to_dict() for r in results]}
+        verdicts, results = cp["engine"].analyse(req.text, per_claim=max(1, min(req.per_claim, 5)), seen=seen)
+        # Verdicts (a myth, the real figure, "which study?") lead; parallels follow.
+        payload = {"session": session, "verdicts": verdicts, "results": [r.to_dict() for r in results]}
         if results and llm_on and req.llm:
             by_claim: dict[str, list] = {}
             for r in results:

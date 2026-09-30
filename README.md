@@ -21,7 +21,7 @@ and never leave it.
 | **Spelling** | Your most frequent misspellings with suggested corrections and an example, misspellings per 1,000 words, who you misspell things to, and (flipped) who misspells the most at you. Text-speak like "lol" and "gonna" is ignored, as are URLs and names. |
 | **Words & tone** | Most used words, emoji counts and favourites per person, and warm-minus-cold tone words by month and by person. Tone is a word count, not a mood reading: it cannot see sarcasm or "not great", and the app says so. |
 | **Wrapped** | The year on one 1080 × 1350 card: total messages, who you talk to most, busiest hour, reply times, after-midnight share, longest streak, your word, your emoji, your worst typo. Downloads as a 2× PNG. |
-| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari). Every claim like "70%", "seventy percent", "1 in 5", "three out of four", "most people", or "3 times more likely" gets one or more sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
+| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari). A known myth is called a myth, with the source. A claim the facts cover is checked against the real figure ("close, but high: it's 62%, Gallup 2023"). "Studies show" and "everyone knows" get asked for their evidence. Then every claim like "70%", "seventy percent", "1 in 5", "most people", "up 40%", "15 to 30 times more likely" gets sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
 | **Import** | WhatsApp exports, iMessage `chat.db`, Android "SMS Backup & Restore" XML, Telegram JSON, Instagram and Messenger downloads, Discord packages, or generic CSV/JSON. Zips are read in place, and the format is detected for you. |
 
 Every chart has a **Table** toggle and hover tooltips, and follows the viewer's
@@ -150,6 +150,28 @@ Each answer can be shared as an image. The picture is rendered while you are
 reading the card, not when you tap Share, because iOS only accepts a share that
 is raised straight from the tap.
 
+## What the engine answers, in order
+
+1. **Myths.** `counterpoint/myths.json` lists popular "facts" that are false,
+   each with the truth and a source. A sentence holding one gets "That's a
+   myth." and no parallel: the answer to a myth is no, not an equally
+   irrelevant number. Each myth carries example phrasings the tests check it
+   catches, and the tests also check it ignores ordinary sentences.
+2. **Fact-checks.** When a percentage is about something the facts measure
+   (drinking, obesity, tattoos, the Earth's water...), it is checked against the
+   real figure: fair, close, or off, and by how much. `_TOPICS` in `engine.py`
+   maps subjects to facts by hand, and a check is skipped whenever the framing
+   ("don't drink") or the population ("Brits") differs. A wrong verdict is
+   worse than none.
+3. **Appeals with no number.** "Studies show", "it's proven", "everyone
+   knows", "millions of people" each get a question.
+4. **Parallels**, as before.
+
+A **share** ("70% of people") and a **change** ("up 40%", "20% less likely")
+are different claims. A change is a multiplier on a baseline nobody stated, so
+it is matched against ratio facts and gets its own fallacy note. "I'm 100%
+sure" is not a statistic and is ignored.
+
 ## Fact packs and voices
 
 `randostats/counterpoint/packs/*.json` holds themed fact packs (Sports, Money,
@@ -159,9 +181,11 @@ professor, Sports announcer, Victorian gentleman. Toggle both from chips on the
 Counterpoint tab; the choice is stored in the database and survives a restart.
 
 Adding either means dropping a JSON file in the right directory. A pack needs
-an `id`, a `name`, and a list of facts with a source and year. A voice needs
-template lists for `percent` and `ratio` plus the three `fallacy_*` lists; any
-list you leave out falls back to the house lines. Placeholders available to a
+an `id`, a `name`, and a list of facts with a source and year; it may also
+carry `myths`. A fact whose statement starts with a proper noun ("Russia is…")
+sets `"proper": true` so it keeps its capital mid-sentence. A voice needs
+template lists for `percent` and `ratio` plus the `fallacy_*` and `appeal_*`
+lists; any list you leave out falls back to the house lines. Placeholders available to a
 template are `{fact}`, `{fact_lc}`, `{short}`, `{subject}`, `{subject_or_that}`,
 `{gap}`, `{claim_v}` and `{fact_v}`; fact statements carry no trailing full
 stop, so templates supply their own punctuation.
@@ -192,7 +216,7 @@ randostats/
   stats.py        overview, frequency, timing, reply latency, conversation health, words,
                   misspellings, emoji, tone, search, wrapped
   store.py        SQLite persistence (idempotent imports, settings)
-  counterpoint/   facts.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
+  counterpoint/   facts.json, myths.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
   api.py          FastAPI routes
   static/         single-page front end, hand-drawn SVG charts, drill-down drawer,
                   Wrapped card, Web Speech API listening

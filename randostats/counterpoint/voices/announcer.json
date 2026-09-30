@@ -27,5 +27,24 @@
   "percent_close": [
     "OH, THAT'S A BIG NUMBER! But folks, {fact_lc}! SAME FIGURE! COMPLETELY UNRELATED! The crowd goes quiet!",
     "WHAT A STATISTIC! And equally true: {fact_lc}! Two numbers, one coincidence, zero evidence!"
+  ],
+  "fallacy_change": [
+    "A {v}% {direction}! FROM WHAT?! Five to seven is up forty percent, folks!",
+    "NO STARTING POINT ON THE BOARD! A {v}% {direction} of almost nothing is still almost nothing!"
+  ],
+  "fallacy_myth": [
+    "IT'S A MYTH! Repeated for decades and NEVER measured! What a comeback from the facts!"
+  ],
+  "appeal_authority": [
+    "STUDIES SHOW! Which studies?! The ref wants to see the paperwork!"
+  ],
+  "appeal_popularity": [
+    "EVERYONE KNOWS! And everyone has been wrong before! Check the replay!"
+  ],
+  "appeal_proof": [
+    "PROVEN?! Proven by who?! We need a source on the field!"
+  ],
+  "appeal_count": [
+    "MILLIONS! Out of HOW MANY?! Give us the rate, not the crowd noise!"
   ]
 }

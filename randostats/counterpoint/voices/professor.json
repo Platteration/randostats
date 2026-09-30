@@ -27,5 +27,24 @@
   ],
   "percent_close": [
     "Noted. {fact}. Two quantities of equal size are not thereby connected; that is arithmetic, not evidence."
+  ],
+  "fallacy_change": [
+    "A {v}% {direction} is a ratio of two numbers, neither of which you have given me.",
+    "Relative change without a baseline is uninterpretable. From what, and measured when?"
+  ],
+  "fallacy_myth": [
+    "A figure that has been repeated is not thereby a figure that has been measured."
+  ],
+  "appeal_authority": [
+    "Which study? I would want the authors, the sample size, and whether it replicated."
+  ],
+  "appeal_popularity": [
+    "Widespread belief is a sociological observation, not an epistemic one."
+  ],
+  "appeal_proof": [
+    "Empirical claims are supported, not proven. Supported by what, precisely?"
+  ],
+  "appeal_count": [
+    "An absolute count is meaningless without its denominator. Millions out of how many?"
   ]
 }

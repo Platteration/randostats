@@ -27,5 +27,24 @@
   ],
   "percent_close": [
     "{fact}. A remarkable coincidence of magnitude, sir, and nothing whatever besides."
+  ],
+  "fallacy_change": [
+    "A {v}% {direction}, you say. From what height, sir? A trifle increased remains a trifle.",
+    "You have furnished me a proportion of a quantity you decline to name."
+  ],
+  "fallacy_myth": [
+    "A tale oft repeated in the drawing room, sir, and never once measured."
+  ],
+  "appeal_authority": [
+    "Studies, sir? Pray name one. The gentleman who conducted it would be delighted."
+  ],
+  "appeal_popularity": [
+    "Everyone once knew the Earth to be the centre of all things. How fashionable."
+  ],
+  "appeal_proof": [
+    "Proven? By whom, and before which learned society?"
+  ],
+  "appeal_count": [
+    "Millions, you say. Of how many millions, I wonder?"
   ]
 }

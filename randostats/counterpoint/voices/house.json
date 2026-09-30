@@ -29,5 +29,30 @@
     "Sure. And {fact_lc}. Same number, zero connection, exactly as much proof.",
     "Fun fact of identical magnitude: {fact_lc}. Neither number proves anything about the other.",
     "{claim_v}% is also roughly {short}. Coincidence? Yes. Entirely."
+  ],
+  "fallacy_change": [
+    "A {v}% {direction} from what? Five to seven is up 40%, and so is five thousand to seven thousand.",
+    "Percent change hides the starting point. A {v}% {direction} in something rare is still rare.",
+    "Relative change without the absolute numbers is a vibe with a percent sign."
+  ],
+  "fallacy_myth": [
+    "Repeated often enough, a guess starts to sound like a statistic. This one never was.",
+    "The number is familiar because it gets repeated, not because anyone measured it."
+  ],
+  "appeal_authority": [
+    "Who ran it, on whom, and did anyone manage to repeat it?",
+    "'Studies show' is where a citation should go. Ask for the citation."
+  ],
+  "appeal_popularity": [
+    "How many people know something has no bearing on whether it is true.",
+    "Common knowledge is how myths travel."
+  ],
+  "appeal_proof": [
+    "Proven by whom, and how? 'It's a fact' is a claim about confidence, not evidence.",
+    "Science rarely proves; it measures. Ask what was measured."
+  ],
+  "appeal_count": [
+    "Millions out of how many? A count without a denominator is not a rate.",
+    "Big numbers of people are easy to find in a world of eight billion. What's the rate?"
   ]
 }

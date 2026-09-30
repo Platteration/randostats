@@ -27,14 +27,29 @@
 
   // ---------------------------------------------------------------- the deck
 
-  /* One flat list of answers. Where Claude picked a fact, that one leads. */
+  const LABELS = { myth: "Myth", check: "Fact check", appeal: "Says who?" };
+
+  /* One flat list of answers. Verdicts lead: a myth called a myth, the real
+     figure, "which study?". Then the parallels, where Claude's pick leads. */
   function buildDeck(payload) {
+    const deck = (payload.verdicts || []).map((v) => ({
+      claim: v.claim,
+      kind: v.kind,
+      verdict: true,
+      label: LABELS[v.kind] || "",
+      punch: v.title,
+      statement: v.line,
+      source: v.source || "",
+      year: v.year || "",
+      gap: null,
+      problem: v.note || "",
+      byClaude: false,
+    }));
     const groups = new Map();
     for (const r of payload.results || []) {
       if (!groups.has(r.claim.key)) groups.set(r.claim.key, []);
       groups.get(r.claim.key).push(r);
     }
-    const deck = [];
     for (const [key, results] of groups) {
       const llm = payload.llm && payload.llm[key];
       const ordered = llm ? [...results].sort((a, b) => (b.fact.id === llm.fact_id) - (a.fact.id === llm.fact_id)) : results;
@@ -57,7 +72,7 @@
   }
 
   const gapLabel = (card) =>
-    card.kind === "ratio" ? "nearest match"
+    card.kind === "ratio" || card.kind === "change" ? "nearest match"
       : card.gap === 0 ? "identical"
         : card.gap === 1 ? "1 point off" : `${card.gap} points off`;
 
@@ -65,6 +80,13 @@
      underneath just pads the card out. */
   const repeatsTheFact = (card) =>
     Boolean(card.statement) && card.punch.includes(card.statement.slice(0, 40));
+
+  /* A verdict's line ends in its own full stop and has no gap to report. */
+  const factText = (card) => card.verdict ? card.statement : `${card.statement}.`;
+  function sourceText(card) {
+    const where = [card.source, card.year].filter(Boolean).join(", ");
+    return card.verdict ? where : `${where} · ${gapLabel(card)}`;
+  }
 
   function showCard(i) {
     if (!state.deck.length) return;
@@ -75,14 +97,19 @@
     // Built outside the template: a condition in there reads, to the escaping
     // lint, exactly like an unescaped value, and the lint is worth keeping strict.
     const badge = card.byClaude ? ' <span class="muted">· Claude</span>' : "";
-    const fact = repeatsTheFact(card) ? "" : `<div class="fact">${esc(card.statement)}.</div>`;
+    const fact = repeatsTheFact(card) ? "" : `<div class="fact">${esc(factText(card))}</div>`;
+    const tone = card.verdict ? `card verdict ${card.kind}` : "card";
+    const label = card.label ? `<span class="label">${esc(card.label)}</span>` : "";
+    const src = sourceText(card) ? `<div class="src">${esc(sourceText(card))}</div>` : "";
+    const problem = card.problem
+      ? `<details class="gap"><summary><b>The actual problem</b></summary><p>${esc(card.problem)}</p></details>` : "";
 
-    $("#cards").innerHTML = `<article class="card">
-      <div class="said">They said<b>“${esc(card.claim)}”</b></div>
+    $("#cards").innerHTML = `<article class="${esc(tone)}">
+      <div class="said">${label}They said<b>“${esc(card.claim)}”</b></div>
       <p class="punch">${esc(card.punch)}${badge}</p>
       ${fact}
-      <div class="src">${esc(card.source)}, ${esc(card.year)} · ${esc(gapLabel(card))}</div>
-      <details class="gap"><summary><b>The actual problem</b></summary><p>${esc(card.problem)}</p></details>
+      ${src}
+      ${problem}
       <div class="actions">
         <button class="ghost" data-act="share">Share</button>
         <button class="ghost" data-act="copy">Copy</button>
@@ -91,7 +118,7 @@
 
     $("#deck-nav").hidden = state.deck.length < 2;
     $("#deck-count").textContent = `${state.index + 1} of ${state.deck.length}`;
-    say(`${card.punch}. ${card.source}, ${card.year}.`);
+    say([card.punch, factText(card), sourceText(card)].filter(Boolean).join(" "));
 
     $$("#cards [data-act]").forEach((b) => b.addEventListener("click", () => {
       if (b.dataset.act === "share") shareCard(card);
@@ -129,7 +156,7 @@
       });
       state.deck = buildDeck(payload);
       if (!state.deck.length) {
-        showNotice("No number in there.", "Try “70% of people…”, “1 in 5…”, “most people…”, or “3 times more likely”.");
+        showNotice("Nothing to answer in there.", "Try a number (“70% of people…”, “up 40%”, “3 times more likely”), a myth, or “studies show…”.");
       } else {
         showCard(0);
       }
@@ -205,8 +232,10 @@
     const parts = [
       `<rect width="${CARD_W}" height="${CARD_H}" fill="#0f0f0e"/>`,
       `<rect width="${CARD_W}" height="10" fill="${warm}"/>`,
-      `<text x="${pad}" y="100" font-family="system-ui, sans-serif" font-size="22" letter-spacing="3" fill="${mute}">THEY SAID</text>`,
     ];
+    const eyebrow = card.label ? `${card.label.toUpperCase()} · THEY SAID` : "THEY SAID";
+    parts.push(`<text x="${pad}" y="100" font-family="system-ui, sans-serif" font-size="22" letter-spacing="3" ` +
+      `fill="${card.label ? warm : mute}">${esc(eyebrow)}</text>`);
 
     const claim = block(`“${card.claim}”`, { x: pad, y: 158, size: 34, fill: dim, width, maxLines: 2 });
     parts.push(claim.markup);
@@ -215,20 +244,31 @@
     // cut the joke in half, which is the one thing this card must never do, and
     // there is a page of room below. Biggest size that fits entire, wins.
     const LINE_BUDGET = 9;
-    const punchSize = [76, 68, 60, 52, 46, 40, 34].find((s) => fitsIn(card.punch, s, 600, width, LINE_BUDGET)) || 30;
-    const punch = block(card.punch, { x: pad, y: claim.bottom + 130, size: punchSize, weight: 600, fill: ink, width, maxLines: LINE_BUDGET });
-    parts.push(punch.markup);
+    // A verdict's title is three words: as big as fits on one line.
+    const punchSize = (card.verdict && [120, 104, 88, 76].find((s) => fitsIn(card.punch, s, 600, width, 1)))
+      || [76, 68, 60, 52, 46, 40, 34].find((s) => fitsIn(card.punch, s, 600, width, LINE_BUDGET)) || 30;
+    const top = claim.bottom + 60;
+    const answer = [];
+    const punch = block(card.punch, { x: pad, y: top + punchSize, size: punchSize, weight: 600, fill: ink, width, maxLines: LINE_BUDGET });
+    answer.push(punch.markup);
 
     let y = punch.bottom + 90;
     if (card.statement && !repeatsTheFact(card)) {
-      const fact = block(`${card.statement}.`, { x: pad, y, size: 30, fill: dim, width, maxLines: 3 });
-      parts.push(fact.markup);
-      y = fact.bottom + 56;
+      // A verdict's line is the substance of the card, so it gets more room and bigger type.
+      const size = card.verdict ? 40 : 30;
+      const fact = block(factText(card), { x: pad, y, size, fill: dim, width, maxLines: card.verdict ? 6 : 3 });
+      answer.push(fact.markup);
+      y = fact.bottom + 60;
     }
     if (card.source) {
-      parts.push(`<text x="${pad}" y="${y}" font-family="system-ui, sans-serif" font-size="24" fill="${mute}">` +
-        `${esc(card.source)}, ${esc(card.year)} · ${esc(gapLabel(card))}</text>`);
+      answer.push(`<text x="${pad}" y="${y}" font-family="system-ui, sans-serif" font-size="26" fill="${mute}">` +
+        `${esc(sourceText(card))}</text>`);
     }
+    // A short answer sat at the top of a mostly empty card. Centre it, a little
+    // high, in the room between the claim and the mark; a long one stays put.
+    const room = 1180 - top, used = y - top;
+    const drop = Math.max(0, Math.round((room - used) * 0.4));
+    parts.push(`<g transform="translate(0 ${drop})">${answer.join("")}</g>`);
 
     // The mark stays pinned to the bottom whatever happened above it.
     parts.push(`<rect x="${pad}" y="1240" width="44" height="44" rx="12" fill="#3987e5"/>`,
@@ -302,7 +342,7 @@
   }
 
   function copyCard(card) {
-    const text = `${card.punch}\n${card.statement ? card.statement + ". " : ""}${card.source}, ${card.year}`;
+    const text = [card.punch, card.statement ? factText(card) : "", sourceText(card)].filter(Boolean).join("\n");
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => hint("Copied."), () => hint("Could not copy."));
     else hint("Copying isn't available in this browser.");
   }

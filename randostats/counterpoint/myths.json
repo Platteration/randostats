@@ -1,0 +1,318 @@
+{
+  "_about": "Popular 'facts' that are false, each with what is actually true and where that comes from. 'patterns' are regular expressions that must all match within one sentence; 'examples' are phrasings that must be caught, and are checked by the tests. A myth is answered before any parallel, because the right reply to a myth is not an equally irrelevant number, it is no.",
+  "myths": [
+    {
+      "id": "brain-10",
+      "claim": "We only use 10% of our brains",
+      "patterns": [
+        "\\b(?:10|ten)\\s*(?:%|percent|per cent)",
+        "\\bbrains?\\b"
+      ],
+      "truth": "Brain imaging shows activity across virtually every region over the course of a day. There is no idle 90%",
+      "source": "Scientific American",
+      "year": 2008,
+      "examples": [
+        "You only use 10% of your brain",
+        "humans use ten percent of their brains"
+      ]
+    },
+    {
+      "id": "spiders-sleep",
+      "claim": "People swallow eight spiders a year in their sleep",
+      "patterns": [
+        "\\bspiders?\\b",
+        "\\b(?:swallow|eat|ate|consume)\\w*",
+        "\\b(?:sleep\\w*|a\\s+year|per\\s+year|every\\s+year)\\b"
+      ],
+      "truth": "No study has ever found this. A sleeping, breathing, snoring person is a source of vibration that spiders tend to avoid",
+      "source": "Scientific American",
+      "year": 2014,
+      "examples": [
+        "The average person eats 8 spiders a year while sleeping",
+        "we swallow spiders in our sleep"
+      ]
+    },
+    {
+      "id": "head-heat",
+      "claim": "You lose most of your body heat through your head",
+      "patterns": [
+        "\\bheat\\b",
+        "\\bthrough\\s+(?:your|our|the|their|his|her|my)\\s+heads?\\b|\\bheads?\\b[^.]*\\b(?:lose|loses|lost|losing|escape\\w*)\\b|\\b(?:lose|loses|lost|losing|escape\\w*)\\b[^.]*\\bheads?\\b"
+      ],
+      "truth": "The head is about 10% of the body's surface and loses roughly that share of heat. An uncovered head is no worse than any other uncovered part",
+      "source": "BMJ",
+      "year": 2008,
+      "examples": [
+        "we lose 50 percent of our body heat through our heads",
+        "most of your heat escapes through your head"
+      ]
+    },
+    {
+      "id": "eight-glasses",
+      "claim": "You need to drink eight glasses of water a day",
+      "patterns": [
+        "\\b(?:8|eight)\\s+glasses\\b"
+      ],
+      "truth": "No study supports a fixed eight glasses. Water in food and other drinks counts, and for healthy people thirst is a good guide",
+      "source": "American Journal of Physiology",
+      "year": 2002,
+      "examples": [
+        "you need 8 glasses of water a day",
+        "drink eight glasses of water daily"
+      ]
+    },
+    {
+      "id": "shaving-thicker",
+      "claim": "Shaving makes hair grow back thicker",
+      "patterns": [
+        "\\bshav\\w*",
+        "\\b(?:grows?|grew|come|comes)\\s+back\\b"
+      ],
+      "truth": "Shaving cuts hair at its widest point, so the stubble feels coarse. It does not change how thick, dark or fast hair grows",
+      "source": "BMJ",
+      "year": 2007,
+      "examples": [
+        "shaving makes your hair grow back thicker",
+        "if you shave it grows back darker"
+      ]
+    },
+    {
+      "id": "grow-after-death",
+      "claim": "Hair and nails keep growing after death",
+      "patterns": [
+        "\\b(?:hair|nails?|fingernails?)\\b",
+        "\\b(?:after|when)\\s+(?:you\\s+|we\\s+|people\\s+)?(?:death|die|dies|died)\\b"
+      ],
+      "truth": "The skin dries and retracts after death, which makes hair and nails look longer. Growth needs a working body",
+      "source": "BMJ",
+      "year": 2007,
+      "examples": [
+        "your hair and nails keep growing after death",
+        "fingernails grow after you die"
+      ]
+    },
+    {
+      "id": "dim-light",
+      "claim": "Reading in dim light ruins your eyesight",
+      "patterns": [
+        "\\b(?:dim|low|bad|poor)\\s+light",
+        "\\b(?:eyes|eyesight|sight|vision)\\b"
+      ],
+      "truth": "It can cause temporary eye strain, but there is no evidence it does lasting damage",
+      "source": "BMJ",
+      "year": 2007,
+      "examples": [
+        "reading in dim light ruins your eyesight",
+        "reading in low light damages your eyes"
+      ]
+    },
+    {
+      "id": "turkey-sleepy",
+      "claim": "Turkey makes you sleepy",
+      "patterns": [
+        "\\bturkey\\b",
+        "\\b(?:sleep|sleepy|drows\\w*|tired)\\b",
+        "\\b(?:eat\\w*|ate|tryptophan|makes?\\s+you)\\b"
+      ],
+      "truth": "Turkey has no more tryptophan than chicken or beef. A very large meal, and often alcohol, is the more likely culprit",
+      "source": "BMJ",
+      "year": 2007,
+      "examples": [
+        "turkey makes you sleepy because of the tryptophan",
+        "eating turkey makes you tired"
+      ]
+    },
+    {
+      "id": "sugar-hyper",
+      "claim": "Sugar makes children hyperactive",
+      "patterns": [
+        "\\bsugar\\b",
+        "\\bhyper\\w*"
+      ],
+      "truth": "A meta-analysis of double-blind trials found no effect of sugar on children's behaviour or thinking",
+      "source": "JAMA",
+      "year": 1995,
+      "examples": [
+        "sugar makes kids hyperactive",
+        "the kids are hyper from all that sugar"
+      ]
+    },
+    {
+      "id": "gum-seven-years",
+      "claim": "Swallowed gum stays in your stomach for seven years",
+      "patterns": [
+        "\\bgum\\b",
+        "\\b(?:7|seven)\\s+years\\b",
+        "\\b(?:digest\\w*|stomach|stays?|swallow\\w*)\\b"
+      ],
+      "truth": "Gum base is not digested, but it passes through the gut like anything else, in days",
+      "source": "Scientific American",
+      "year": 2007,
+      "examples": [
+        "swallowed gum takes 7 years to digest",
+        "gum stays in your stomach for seven years"
+      ]
+    },
+    {
+      "id": "dog-years",
+      "claim": "One dog year is seven human years",
+      "patterns": [
+        "\\bdogs?\\b",
+        "\\b(?:7|seven)\\s+(?:human\\s+|people\\s+)?years?\\b",
+        "\\b(?:dog|human|people)\\s+years?\\b|\\bfor\\s+every\\b|\\bper\\b"
+      ],
+      "truth": "Dogs age fastest early on: a one-year-old dog is closer to a human of 30. The seven-to-one rule fits no age",
+      "source": "Cell Systems",
+      "year": 2020,
+      "examples": [
+        "one dog year is 7 human years",
+        "dogs age seven years for every one of ours"
+      ]
+    },
+    {
+      "id": "great-wall-space",
+      "claim": "The Great Wall of China is visible from space",
+      "patterns": [
+        "\\bgreat\\s+wall\\b",
+        "\\b(?:space|moon|orbit)\\b"
+      ],
+      "truth": "It is long but narrow, and roughly the colour of the land around it. Astronauts, including China's first, report they could not see it with the naked eye",
+      "source": "NASA",
+      "year": 2005,
+      "examples": [
+        "the Great Wall of China is the only man-made thing visible from space",
+        "you can see the great wall from the moon"
+      ]
+    },
+    {
+      "id": "knuckles-arthritis",
+      "claim": "Cracking your knuckles gives you arthritis",
+      "patterns": [
+        "\\bknuckles?\\b",
+        "\\barthrit\\w*"
+      ],
+      "truth": "Studies comparing habitual knuckle-crackers with everyone else find no difference in arthritis",
+      "source": "Journal of the American Board of Family Medicine",
+      "year": 2011,
+      "examples": [
+        "cracking your knuckles gives you arthritis",
+        "stop cracking your knuckles, you'll get arthritis"
+      ]
+    },
+    {
+      "id": "lightning-twice",
+      "claim": "Lightning never strikes the same place twice",
+      "patterns": [
+        "\\blightning\\b",
+        "\\b(?:never|doesn'?t|does\\s+not|won'?t|can'?t)\\s+strikes?\\b"
+      ],
+      "truth": "It often does, especially tall, pointed and isolated things. The Empire State Building is struck around 20 times a year",
+      "source": "US National Weather Service",
+      "examples": [
+        "lightning never strikes the same place twice",
+        "lightning doesn't strike twice"
+      ]
+    },
+    {
+      "id": "blue-blood",
+      "claim": "Blood is blue until it meets oxygen",
+      "patterns": [
+        "\\bblood\\b",
+        "\\b(?:is|are|looks|actually|really)\\s+blue\\b|\\bblue\\b[^.]*\\b(?:veins?|oxygen|air)\\b"
+      ],
+      "truth": "Blood is always red, darker when it carries less oxygen. Veins look blue because of how skin absorbs and scatters light",
+      "source": "Applied Optics",
+      "year": 1996,
+      "examples": [
+        "blood is blue until it hits the air",
+        "your blood is actually blue inside your veins"
+      ]
+    },
+    {
+      "id": "five-second-rule",
+      "claim": "Food dropped for under five seconds is safe to eat",
+      "patterns": [
+        "\\b(?:5|five)[\\s-]+second\\s+rule\\b"
+      ],
+      "truth": "Bacteria can transfer from a surface to food in under a second. Wet food on a dirty surface picks up the most",
+      "source": "Applied and Environmental Microbiology",
+      "year": 2016,
+      "examples": [
+        "the five second rule",
+        "it's fine, 5 second rule"
+      ]
+    },
+    {
+      "id": "goldfish-memory",
+      "claim": "Goldfish have a three-second memory",
+      "patterns": [
+        "\\bgoldfish\\b",
+        "\\bmemor\\w*"
+      ],
+      "truth": "Goldfish can be trained to respond to sounds, colours and feeding times, and remember them for months",
+      "source": "University of Plymouth",
+      "year": 2003,
+      "examples": [
+        "goldfish have a 3 second memory",
+        "memory like a goldfish, three seconds"
+      ]
+    },
+    {
+      "id": "vaccines-autism",
+      "claim": "Vaccines cause autism",
+      "patterns": [
+        "\\bvaccin\\w*|\\bjabs?\\b|\\bMMR\\b",
+        "\\bautis\\w*"
+      ],
+      "truth": "The 1998 paper behind this was retracted. A study of 657,461 Danish children found no link between the MMR vaccine and autism",
+      "source": "Annals of Internal Medicine",
+      "year": 2019,
+      "examples": [
+        "vaccines cause autism",
+        "the MMR jab is linked to autism"
+      ]
+    },
+    {
+      "id": "bats-blind",
+      "claim": "Bats are blind",
+      "patterns": [
+        "\\bbats?\\b",
+        "\\bblind\\b"
+      ],
+      "truth": "No bat species is blind. Many see well, and some fruit bats rely on sight more than echolocation",
+      "source": "US Geological Survey",
+      "examples": [
+        "bats are blind",
+        "blind as a bat, literally"
+      ]
+    },
+    {
+      "id": "napoleon-short",
+      "claim": "Napoleon was unusually short",
+      "patterns": [
+        "\\bnapoleon\\b",
+        "\\b(?:was|is|so|really|very)\\s+(?:short|tiny|small)\\b|\\bnapoleon\\s+complex\\b"
+      ],
+      "truth": "He was about 1.69 m (5 ft 7 in), average or a little above for a Frenchman of his day. French inches were longer than English ones, which started the story",
+      "source": "Encyclopaedia Britannica",
+      "examples": [
+        "Napoleon was really short",
+        "he's got a Napoleon complex, you know Napoleon was tiny"
+      ]
+    },
+    {
+      "id": "viking-horns",
+      "claim": "Vikings wore horned helmets",
+      "patterns": [
+        "\\bvikings?\\b",
+        "\\bhorn\\w*"
+      ],
+      "truth": "No horned helmet has ever been found from the Viking Age. The image comes from 19th-century costume design for Wagner's operas",
+      "source": "National Museum of Denmark",
+      "examples": [
+        "Vikings wore horned helmets",
+        "a viking helmet with horns"
+      ]
+    }
+  ]
+}

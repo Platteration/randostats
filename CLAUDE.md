@@ -47,6 +47,22 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
   checks in `is_media_placeholder` was three times *slower*. The comment in
   the code says so, so nobody tries it again.
 
+## The counterpoint engine
+
+A realistic probe once showed it confidently wrong: "crime went up 40%" answered
+as a share, "I'm 100% sure" answered as a statistic, famous myths answered with
+parallels. `tests/test_verdicts.py` pins each case. When changing the engine:
+
+- **Share vs change.** A percentage *of* something and a percentage *change*
+  are different kinds. Changes match ratio facts, never shares.
+- **Verdicts before parallels.** `analyse()` returns myths, fact-checks and
+  appeals first. A myth silences parallels in its sentence only.
+- **A fact-check must be right or absent.** `_TOPICS` is hand-written; the
+  first matching topic decides, and a framing or population mismatch returns
+  nothing rather than trying a looser topic. There are tests for each refusal.
+- **Myths test themselves.** Each carries `examples` that must hit it, and a
+  list of ordinary sentences must hit none. Loosen a pattern, run the tests.
+
 ## The phone app
 
 `/m` is a second front end (`static/m.{html,css,js}`, `m-sw.js`, `m.webmanifest`)
@@ -57,6 +73,10 @@ from `app.js`, which is one closed IIFE. Consequences worth knowing:
   ends. Each duplicates `esc()`; neither may skip it.
 - That lint follows multi-line template literals. It used to check only the line
   the sink was on, which let an unescaped value in a card template pass.
+- A second lint parses **every** template literal containing a tag, wherever it
+  is. The sink-based one never saw markup built in a helper or hoisted into a
+  variable, nor a template starting on the line after `innerHTML =`. Hoisting a
+  value to quiet the lint is no longer a way round it.
 - The service worker is served from `/sw.js`, not `/static/`, because scope
   defaults to the script's own directory. It must never cache `/api/` —
   `counterpoint/packs` reflects database state.

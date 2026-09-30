@@ -415,8 +415,8 @@
     if (q) qs.set("q", q);
     const data = await api(`/api/messages?${qs}`);
     drawerState.total = data.total;
-    const html = data.messages.map(m => `<div class="msg ${m.direction}">
-      <div class="meta">${m.direction === "sent" ? "You" : esc(m.sender)}${drawerState.params.contact ? "" : " · " + esc(m.contact)} · ${m.timestamp.slice(0, 16)}</div>
+    const html = data.messages.map(m => `<div class="msg ${esc(m.direction)}">
+      <div class="meta">${m.direction === "sent" ? "You" : esc(m.sender)}${drawerState.params.contact ? "" : " · " + esc(m.contact)} · ${esc(m.timestamp.slice(0, 16))}</div>
       <div class="body">${highlight(m.text, drawerState.params.word)}</div></div>`).join("");
     const list = $("#drawer-list");
     if (append) list.insertAdjacentHTML("beforeend", html); else { list.innerHTML = html || '<div class="empty">No messages match.</div>'; list.scrollTop = 0; }
@@ -484,12 +484,12 @@
     const shown = lim ? rows.slice(0, lim) : rows;
     chartOrTable("people-chart", (c) => hbars(c, shown, {
       key: "contact", keyLabel: "Person", series: ["sent", "received"], labels: ["Sent by you", "Received"],
-      tipFn: (r) => `<b>${esc(r.contact)}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${r.per_day}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>open to read them</i>`,
+      tipFn: (r) => `<b>${esc(r.contact)}</b>${r.is_group ? " (group)" : ""}<br>Sent by you: ${fmt(r.sent)}<br>Received: ${fmt(r.received)}<br>${fmt(r.per_day)}/day · you wrote ${Math.round(100 * r.sent_share)}%<br><i>open to read them</i>`,
       onClick: (r) => openDrawer(r.contact, { contact: r.contact }),
     }));
     const wordy = [...shown].sort((a, b) => b.avg_words_received - a.avg_words_received).slice(0, 12);
     hbars($("#people-words"), wordy, { key: "contact", series: ["avg_words_received"], labels: ["Average words per message"], colors: ["s2"],
-      tipFn: (r) => `<b>${esc(r.contact)}</b><br>Their average: ${r.avg_words_received} words<br>Your average to them: ${r.avg_words_sent} words` });
+      tipFn: (r) => `<b>${esc(r.contact)}</b><br>Their average: ${fmt(r.avg_words_received)} words<br>Your average to them: ${fmt(r.avg_words_sent)} words` });
   };
 
   render.hour = render.weekday = render.month = render.timing = async () => {
@@ -509,7 +509,7 @@
       onClick: (r) => openDrawer(`${contact || "Everyone"} · ${r.month}`, { ...scope, month: r.month }) }));
     const peaks = await api("/api/stats/timing/contacts?limit=15");
     $("#peaks").innerHTML = peaks.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Messages</th><th>Peak day</th><th>Peak hour</th><th>Hours 0–23</th></tr></thead><tbody>` +
-      peaks.map(p => `<tr><td>${dot(p.contact)}${esc(p.contact)}</td><td class="num">${fmt(p.total)}</td><td>${p.peak_weekday}</td><td>${p.peak_hour}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
+      peaks.map(p => `<tr><td>${dot(p.contact)}${esc(p.contact)}</td><td class="num">${fmt(p.total)}</td><td>${esc(p.peak_weekday)}</td><td>${fmt(p.peak_hour)}:00</td><td>${sparkline(p.by_hour, hueOf(p.contact))}</td></tr>`).join("") + "</tbody></table>" : '<div class="empty">No data.</div>';
   };
 
   const mins = (v) => v == null ? "n/a" : v < 60 ? `${Math.round(v)} min` : v < 1440 ? `${(v / 60).toFixed(1)} h` : `${(v / 1440).toFixed(1)} d`;
@@ -527,12 +527,12 @@
     ].join("") : kpi("Conversations", "0", "import something first");
     const top = rows.slice(0, 15);
     chartOrTable("open-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_opened", "they_opened"], labels: ["You opened", "They opened"],
-      tipFn: (r) => `<b>${esc(r.contact)}</b><br>You opened: ${fmt(r.you_opened)} (${pct(r.you_opened_share)})<br>They opened: ${fmt(r.they_opened)}<br>${r.avg_conversation} messages per conversation` }));
+      tipFn: (r) => `<b>${esc(r.contact)}</b><br>You opened: ${fmt(r.you_opened)} (${pct(r.you_opened_share)})<br>They opened: ${fmt(r.they_opened)}<br>${fmt(r.avg_conversation)} messages per conversation` }));
     chartOrTable("close-chart", (c) => hbars(c, top, { key: "contact", keyLabel: "Person", series: ["you_closed", "they_closed"], labels: ["You did", "They did"],
       tipFn: (r) => `<b>${esc(r.contact)}</b><br>You had the last word: ${fmt(r.you_closed)} (${pct(r.you_closed_share)})<br>They did: ${fmt(r.they_closed)}` }));
     chartOrTable("reply-chart", (c) => dumbbell(c, top, { key: "contact", a: "you_reply_median", b: "them_reply_median", labels: ["You answer them", "They answer you"], unit: " min" }));
     $("#convo-table").innerHTML = rows.length ? `<table class="data"><thead><tr><th>Person</th><th class="num">Conversations</th><th class="num">Your double texts</th><th class="num">Theirs</th><th class="num">Avg length</th><th class="num">Longest silence</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${dot(r.contact)}${esc(r.contact)}</td><td class="num">${fmt(r.conversations)}</td><td class="num">${fmt(r.your_double_texts)}</td><td class="num">${fmt(r.their_double_texts)}</td><td class="num">${r.avg_conversation}</td><td class="num">${r.longest_silence_days} d</td></tr>`).join("") + "</tbody></table>"
+      rows.map(r => `<tr><td>${dot(r.contact)}${esc(r.contact)}</td><td class="num">${fmt(r.conversations)}</td><td class="num">${fmt(r.your_double_texts)}</td><td class="num">${fmt(r.their_double_texts)}</td><td class="num">${fmt(r.avg_conversation)}</td><td class="num">${fmt(r.longest_silence_days)} d</td></tr>`).join("") + "</tbody></table>"
       : '<div class="empty">Nothing to measure yet.</div>';
     await renderMembers();
   };
@@ -551,7 +551,7 @@
     }
     const rows = await api(`/api/stats/members?contact=${encodeURIComponent(sel.value || groups[0].contact)}`);
     $("#members-table").innerHTML = `<table class="data"><thead><tr><th>Member</th><th class="num">Messages</th><th class="num">Share</th><th class="num">Avg words</th><th class="num">Peak hour</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${esc(r.sender)}${r.is_you ? " (you)" : ""}</td><td class="num">${fmt(r.count)}</td><td class="num">${pct(r.share)}</td><td class="num">${r.avg_words}</td><td class="num">${r.peak_hour}:00</td></tr>`).join("") + "</tbody></table>";
+      rows.map(r => `<tr><td>${esc(r.sender)}${r.is_you ? " (you)" : ""}</td><td class="num">${fmt(r.count)}</td><td class="num">${pct(r.share)}</td><td class="num">${fmt(r.avg_words)}</td><td class="num">${fmt(r.peak_hour)}:00</td></tr>`).join("") + "</tbody></table>";
   }
 
   render.spell = render.spelling = async () => {
@@ -724,9 +724,24 @@
   // Everything that reaches innerHTML goes through this. Message text, contact
   // names and senders all come from imported files and are not to be trusted.
   const esc = (s) => s == null ? "" : String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  // A verdict is the answer that isn't a joke: a myth called a myth, the real
+  // figure for the claim, or "which study?". They lead; the parallels follow.
+  const VERDICT_LABELS = { myth: "Myth", check: "Fact check", appeal: "Says who?" };
+  function verdictCard(v) {
+    const where = [v.source, v.year].filter(Boolean).join(", ");
+    const src = where ? `<div class="src">${esc(where)}</div>` : "";
+    const note = v.note ? `<div class="gap"><b>The actual problem:</b> ${esc(v.note)}</div>` : "";
+    return `<div class="cp verdict ${esc(v.kind)}">
+      <div class="claim"><span class="badge">${esc(VERDICT_LABELS[v.kind] || v.kind)}</span> They said <b>“${esc(v.claim)}”</b></div>
+      <div class="punch"><b>${esc(v.title)}</b></div>
+      <div class="fact">${esc(v.line)}</div>
+      ${src}${note}
+    </div>`;
+  }
   function renderCounter(payload, { prepend = false } = {}) {
     const box = $("#counter-results");
-    if (!payload.results.length && !prepend) { box.innerHTML = '<div class="empty">No number in there, so nothing to deflate. Try “70% of people…”, “1 in 5…”, “most people…”, or “3 times more likely”.</div>'; return; }
+    const verdicts = payload.verdicts || [];
+    if (!payload.results.length && !verdicts.length && !prepend) { box.innerHTML = '<div class="empty">Nothing to answer in there. Try a number (“70% of people…”, “up 40%”, “3 times more likely”), a myth, or “studies show…”.</div>'; return; }
     const groups = {};
     for (const r of payload.results) (groups[r.claim.key] ||= []).push(r);
     const html = Object.entries(groups).map(([key, rs]) => {
@@ -737,12 +752,13 @@
         <div class="claim">They said <b>“${esc(rs[0].claim.raw)}”</b>${llm ? '<span class="badge">Claude</span>' : ""}</div>
         <div class="punch">${esc(llm ? llm.punchline : chosen.lines[0])}</div>
         <div class="fact">${esc(chosen.fact.statement)}.</div>
-        <div class="src">${esc(chosen.fact.source)}, ${chosen.fact.year} · ${chosen.claim.kind === "ratio" ? "nearest match" : chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
-        ${others.map(o => `<div class="fact" style="margin-top:6px">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${o.fact.year})</span></div>`).join("")}
+        <div class="src">${esc(chosen.fact.source)}, ${esc(chosen.fact.year)} · ${chosen.claim.kind !== "percent" ? "nearest match" : chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
+        ${others.map(o => `<div class="fact" style="margin-top:6px">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${esc(o.fact.year)})</span></div>`).join("")}
         <div class="gap"><b>The actual problem:</b> ${esc(llm ? llm.logic_gap : chosen.fallacy)}</div>
       </div>`;
     }).join("");
-    if (prepend) box.insertAdjacentHTML("afterbegin", html); else box.innerHTML = html;
+    const all = verdicts.map(verdictCard).join("") + html;
+    if (prepend) box.insertAdjacentHTML("afterbegin", all); else box.innerHTML = all;
   }
   async function counter(text, { live = false } = {}) {
     if (!text.trim()) return;
@@ -753,14 +769,14 @@
     }
     const payload = await api("/api/counterpoint", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, session: live ? state.session : null, llm: $("#counter-llm").checked }) });
-    if (live) { if (payload.results.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
+    if (live) { if (payload.results.length || payload.verdicts?.length) renderCounter(payload, { prepend: true }); } else renderCounter(payload);
   }
   $("#members-contact").addEventListener("change", () => renderMembers());
   // Packs and voices are plain JSON on disk; the UI just toggles which are loaded.
   function renderPacks(cfg) {
     $("#pack-chips").innerHTML = cfg.packs.map(p =>
       `<button class="chip ${p.enabled ? "on" : ""} ${p.always_on ? "fixed" : ""} ${p.locked ? "locked" : ""}" data-pack="${esc(p.id)}"
-        title="${esc(p.description)} (${p.facts} facts)"${p.always_on || p.locked ? " disabled" : ""}>${esc(p.name)}</button>`).join("");
+        title="${esc(p.description)} (${fmt(p.facts)} facts)"${p.always_on || p.locked ? " disabled" : ""}>${esc(p.name)}</button>`).join("");
     $("#voice-chips").innerHTML = cfg.voices.map(v =>
       `<button class="chip ${v.id === cfg.voice ? "on" : ""}" data-voice="${esc(v.id)}" title="${esc(v.description)}">${esc(v.name)}</button>`).join("");
     $("#pack-count").textContent = `${fmt(cfg.facts)} facts loaded`;
@@ -787,7 +803,7 @@
   $("#counter-random").addEventListener("click", () => randomPair().catch(counterFailed));
   async function randomPair() {
     const p = await api("/api/counterpoint/random");
-    const sources = p.a ? `<div class="src">${esc(p.a.source)}, ${p.a.year} · ${esc(p.b.source)}, ${p.b.year}</div>` : "";
+    const sources = p.a ? `<div class="src">${esc(p.a.source)}, ${esc(p.a.year)} · ${esc(p.b.source)}, ${esc(p.b.year)}</div>` : "";
     const gap = p.a ? '<div class="gap"><b>The actual problem:</b> two numbers being close is not a relationship. It is arithmetic.</div>' : "";
     $("#counter-results").insertAdjacentHTML("afterbegin",
       `<div class="cp"><div class="claim">Random spurious correlation</div><div class="punch">${esc(p.line)}</div>${sources}${gap}</div>`);

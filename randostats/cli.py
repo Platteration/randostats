@@ -70,10 +70,17 @@ def main(argv: list[str] | None = None) -> int:
         engine = CounterpointEngine(
             packs={p for p in (store.get_setting("packs", "") or "").split(",") if p},
             voice=store.get_setting("voice", DEFAULT_VOICE))
-        results = engine.respond(" ".join(args.text))
-        if not results:
-            print("No quantitative claim found.")
+        verdicts, results = engine.analyse(" ".join(args.text))
+        if not verdicts and not results:
+            print("Nothing to answer: no number, myth, or appeal found.")
             return 1
+        for v in verdicts:
+            source = ", ".join(str(x) for x in (v["source"], v["year"]) if x)
+            print(f"Claim: {v['claim']}")
+            print(f"  {v['title']} {v['line']}")
+            if source:
+                print(f"  Source: {source}.")
+            print()
         for r in results:
             print(f"Claim: {r.claim.raw}")
             for line in r.lines:

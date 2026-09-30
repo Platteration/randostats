@@ -83,6 +83,157 @@ def test_frontend_escapes_every_imported_value_it_renders(front_end):
                            + "\n  ".join(offenders))
 
 
+def js_templates(source: str) -> list[tuple[int, str, list[tuple[str, bool]]]]:
+    """Every template literal in a script, nested ones included.
+
+    Returns (line, literal text, [(expression, holds a nested template)]).
+    Strings, comments and regex literals are skipped so that a backtick or
+    brace inside one cannot throw the count off.
+    """
+    found: list = []
+    ends: list[int] = []
+
+    def skip_string(i: int, quote: str) -> int:
+        i += 1
+        while source[i] != quote:
+            i += 2 if source[i] == "\\" else 1
+        return i + 1
+
+    def skip_regex(i: int) -> int:
+        i, in_class = i + 1, False
+        while True:
+            c = source[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                return i + 1
+            i += 1
+
+    def template(i: int) -> int:
+        start, i, text, expressions = i, i + 1, [], []
+        while source[i] != "`":
+            if source[i] == "\\":
+                i += 2
+                continue
+            if source.startswith("${", i):
+                before = len(ends)
+                end = code(i + 2, closing=True)
+                expressions.append((source[i + 2:end], len(ends) > before))
+                text.append("${}")
+                i = end + 1
+                continue
+            text.append(source[i])
+            i += 1
+        found.append((source.count("\n", 0, start) + 1, "".join(text), expressions))
+        ends.append(i)
+        return i + 1
+
+    def code(i: int, closing: bool = False) -> int:
+        depth, previous = 0, "("
+        while i < len(source):
+            c = source[i]
+            if c in "'\"":
+                i, previous = skip_string(i, c), "a"
+                continue
+            if c == "`":
+                i, previous = template(i), "a"
+                continue
+            if source.startswith("//", i):
+                i = source.find("\n", i)
+                i = len(source) if i == -1 else i
+                continue
+            if source.startswith("/*", i):
+                i = source.index("*/", i) + 2
+                continue
+            if c == "/" and previous in "(,=:[!&|?{};+-*%<>~^":
+                i, previous = skip_regex(i), "a"
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                if depth == 0 and closing:
+                    return i
+                depth -= 1
+            if not c.isspace():
+                previous = c
+            i += 1
+        return i
+
+    code(0)
+    return found
+
+
+# Functions that escape everything they are given, or only ever emit numbers.
+SAFE_PRODUCERS = ("highlight(", "toneTable(", "sparkline(")
+# Geometry and palette computed inside the function that renders them.
+SAFE_LOCALS = ("pts.join(", "hue[")
+TERNARY = re.compile(r"^(?P<cond>[^?`]+)\?(?P<yes>[^:`]+):(?P<no>[^:`]+)$", re.S)
+
+
+def unescaped(expression: str) -> bool:
+    """Whether an interpolation could carry somebody else's markup."""
+    safe = LAUNDERED + SAFE_PRODUCERS + SAFE_LOCALS
+    if expression.strip().startswith(safe):  # esc(a ? b : c) is escaped whichever way it goes
+        return False
+    ternary = TERNARY.match(expression.strip())
+    if ternary:  # the condition is never output; only the branches are
+        return unescaped(ternary["yes"]) or unescaped(ternary["no"])
+    if any(token in expression for token in safe):
+        return False
+    return bool(ROW_VALUE.search(expression))
+
+
+def markup_offenders(source: str) -> list[str]:
+    offenders = []
+    for line, text, expressions in js_templates(source):
+        if not re.search(r"<(?:[a-zA-Z/]|!--)", text):
+            continue  # not markup; "(?<!" in a regex is not a tag
+        for expression, nested in expressions:
+            # A nested template is checked on its own, as a template.
+            if not nested and unescaped(expression):
+                offenders.append(f"line {line}: ${{{expression}}}")
+    return offenders
+
+
+def test_the_markup_scanner_finds_what_it_should():
+    """The lint is only as good as its parser, so the parser is tested too."""
+    js = r"""
+      const re = /[`'"{}]/g;               // a regex full of things that look like syntax
+      const s = "a ` in a string";         // and a string
+      /* a ` in a comment */
+      const a = `<b>${r.name}</b>`;         // flagged: bare row value
+      const b = `<b>${esc(r.name)}</b>`;    // fine
+      const c = `<i class="${r.on ? "on" : ""}">`;  // fine: literal branches
+      const d = `<i>${r.on ? r.name : ""}</i>`;     // flagged: a branch is data
+      const e = rows.map(r => `<td>${r.cell}</td>`).join("");  // flagged, nested in code
+      const f = `<ul>${rows.map(r => `<li>${esc(r.x)}</li>`).join("")}</ul>`;  // fine
+      const g = `plain ${r.name}`;          // not markup, not this test's business
+      const h = `<p>${esc(r.on ? r.a : r.b)}</p>`;  // fine: escaped whichever branch
+      const k = new RegExp(`(?<!x)${r.word}`);      // a lookbehind, not a tag
+    """
+    found = markup_offenders(js)
+    assert found == ["line 5: ${r.name}", "line 8: ${r.on ? r.name : \"\"}", "line 9: ${r.cell}"], found
+
+
+@pytest.mark.parametrize("front_end", FRONT_ENDS, ids=lambda p: p.name)
+def test_every_markup_template_escapes_its_values(front_end):
+    """The sink test above only sees a template on the same line as innerHTML.
+
+    Markup built in a helper (a card, a tooltip, a row) and handed to a sink
+    later was never checked at all, nor was a template that starts on the
+    line after the sink. Hoisting a value into a variable to satisfy the lint
+    was therefore also a way round it. This walks every template literal
+    that contains a tag, wherever it is.
+    """
+    offenders = markup_offenders(front_end.read_text())
+    assert not offenders, "markup built from data without esc():\n  " + "\n  ".join(offenders)
+
+
 def test_oversized_upload_is_refused(client, monkeypatch):
     import randostats.api as api
 

@@ -102,6 +102,10 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .cp .gap { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--grid); color: var(--ink-2); font-size: 13px; }
 .cp .gap b { color: var(--ink); }
 .cp.llm { border-left-color: var(--s1); }
+.cp.verdict.check { border-left-color: var(--s1); }
+.cp.verdict.myth { border-left-color: var(--danger); }
+.cp.verdict.appeal { border-left-color: var(--muted); }
+.cp.verdict .claim .badge { margin: 0 6px 0 0; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--grid); color: var(--ink-2); margin-left: 6px; }
 .import-form { display: grid; gap: 12px; max-width: 520px; }
 .import-form label { display: grid; gap: 4px; }
