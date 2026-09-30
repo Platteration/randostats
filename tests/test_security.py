@@ -17,7 +17,7 @@ from randostats.parsers import archive
 STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
 APP_JS = STATIC / "app.js"
 # Every front end that puts somebody else's words on screen, not just the first.
-FRONT_ENDS = (APP_JS, STATIC / "m.js")
+FRONT_ENDS = (APP_JS, STATIC / "m.js", STATIC / "overview.js", STATIC / "ui-state.js")
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ HTML_SINKS = (".innerHTML", "insertAdjacentHTML", "hover(", "showTip(")
 # A value read off a row of API data: r.contact, p.contact, w.word, r[key], m.sender...
 ROW_VALUE = re.compile(r"\b[a-z]{1,4}(\.[a-zA-Z_]\w*|\[[^\]]+\])")
 # Escapes it, or turns it into a number. Either way it cannot carry markup.
-LAUNDERED = ("esc(", "dot(", "fmt(", "pct(", "mins(", "compact(", ".toFixed(", "Math.round(", "hueOf(")
+LAUNDERED = ("esc(", "escapeHtml(", "dot(", "fmt(", "pct(", "mins(", "compact(", ".toFixed(", "Math.round(", "hueOf(")
 
 
 @pytest.mark.parametrize("front_end", FRONT_ENDS, ids=lambda p: p.name)

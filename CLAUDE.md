@@ -1,5 +1,7 @@
 # randostats
 
+Read AGENTS.md first. It holds the working rules every coding agent follows in this repository; this file adds the notes specific to this project.
+
 Message statistics plus a counterpoint engine that answers a statistic with a
 real, sourced one of the same size and no relevance. See README.md for what it
 does and how to run it. This file is the working context: conventions, and the
@@ -70,7 +72,9 @@ sharing only the counterpoint API. Deliberately standalone rather than importing
 from `app.js`, which is one closed IIFE. Consequences worth knowing:
 
 - `tests/test_security.py` parameterises its escaping lint over **both** front
-  ends. Each duplicates `esc()`; neither may skip it.
+  ends. Each duplicates `esc()`; neither may skip it. The desktop modules
+  (`overview.js`, `ui-state.js`) are in the same `FRONT_ENDS` list; a new static
+  module goes there too, or the lint never sees it.
 - That lint follows multi-line template literals. It used to check only the line
   the sink was on, which let an unescaped value in a card template pass.
 - A second lint parses **every** template literal containing a tag, wherever it
