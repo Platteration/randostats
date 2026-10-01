@@ -23,6 +23,7 @@ Everything here is deterministic given a seed, and needs no network.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import math
@@ -31,7 +32,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .packs import CORE_PATH as FACTS_PATH, DEFAULT_VOICE, load_facts, load_myths, load_voice
+from .packs import DEFAULT_VOICE, load_facts, load_myths, load_voice
 
 # Percentage points within which two figures can fairly be called the same.
 CLOSE_ENOUGH = 3.0
@@ -175,11 +176,24 @@ def _tail(text: str, pos: int) -> str:
     return rest[:cut.start()] if cut else rest
 
 
-def _head(text: str, pos: int) -> str:
-    """The clause leading up to position ``pos``, from the last boundary."""
-    before = text[:pos]
-    cuts = list(_SUBJECT_STOP.finditer(before))
-    return before[cuts[-1].end():] if cuts else before
+def _head(text: str, pos: int, stops: list[int] | None = None) -> str:
+    """The clause leading up to position ``pos``, from the last boundary.
+
+    ``stops`` is the end of every boundary in the whole of ``text``, found once
+    by the caller: scanning the prefix again for every claim made extraction
+    quadratic in the length of the text. A boundary that ends before ``pos`` is
+    the same match in the prefix as in the whole text. The prefix can have one
+    more, ending exactly at ``pos`` where its ``\\b`` meets the cut ("and" in
+    "andy"), and no boundary is longer than 16 characters, so only those last
+    few are scanned again as the prefix itself would see them.
+    """
+    if stops is None:
+        stops = [m.end() for m in _SUBJECT_STOP.finditer(text)]
+    i = bisect.bisect_left(stops, pos) - 1
+    last = stops[i] if i >= 0 else 0
+    for m in _SUBJECT_STOP.finditer(text, max(last, pos - 16), pos):
+        last = m.end()
+    return text[last:pos]
 
 
 def _clean_subject(rest: str) -> str:
@@ -197,15 +211,29 @@ def _span_value(m: re.Match) -> float | None:
     return None if high is None else round((low + high) / 2, 2)
 
 
-def extract_claims(text: str) -> list[Claim]:
+# An answer is per claim, and nobody reads twenty rebuttals. A pasted article
+# is otherwise thousands of claims, each costing a match, a render and (with
+# --llm) a paid call.
+MAX_CLAIMS = 20
+
+
+def extract_claims(text: str, limit: int = MAX_CLAIMS) -> list[Claim]:
     claims: list[tuple[int, Claim]] = []
-    spans: list[tuple[int, int]] = []
+    # Which characters an earlier pattern has already claimed. A scan of the
+    # spans recorded so far would be linear in the claims found, making the
+    # whole extraction quadratic in the length of the text.
+    covered = bytearray(len(text))
+    stops = [m.end() for m in _SUBJECT_STOP.finditer(text)]
+
+    def cover(m: re.Match) -> None:
+        covered[m.start():m.end()] = b"\x01" * (m.end() - m.start())
+
     # The whole reach of each numeric claim. "0.1% of people control most of
     # the wealth" is one claim; the "most of" inside it is not a second.
     reaches: list[tuple[int, int]] = []
 
     def taken(m: re.Match) -> bool:
-        return any(not (m.end() <= s or m.start() >= e) for s, e in spans)
+        return any(covered[m.start():m.end()])
 
     def add(m: re.Match, kind: str, value: float, quantifier: str = "exact", noun: str = "",
             band: tuple[float, float] | None = None) -> None:
@@ -214,17 +242,21 @@ def extract_claims(text: str) -> list[Claim]:
         if noun:
             subject = f"{noun} {subject}".strip()
         raw = re.sub(r"\s+", " ", text[m.start():m.end() + len(tail)]).strip(" ,.-")
-        context = re.sub(r"\s+", " ", _head(text, m.start()) + text[m.start():m.end() + len(tail)]).strip(" ,.-")
+        context = re.sub(r"\s+", " ", _head(text, m.start(), stops) + text[m.start():m.end() + len(tail)]).strip(" ,.-")
         core = re.sub(r"\s+", " ", m.group(0)).strip()
         if kind == "change":
             raw = context  # "up 40%" means nothing without what went up
         claims.append((m.start(), Claim(kind, value, raw, subject, quantifier, core, m.start(), context, band)))
-        spans.append((m.start(), m.end()))
+        cover(m)
         if quantifier == "exact":
             reaches.append((m.start(), m.end() + len(tail)))
 
     for kind, pat in _PATTERNS:
+        if len(claims) >= limit:
+            break
         for m in pat.finditer(text):
+            if len(claims) >= limit:
+                break
             if taken(m):
                 continue
             if kind == "from":
@@ -242,7 +274,7 @@ def extract_claims(text: str) -> list[Claim]:
                 after = text[m.end():]
                 # A bare 100% is an intensifier ("I'm 100% with you") unless it is a share of something.
                 if _CONFIDENCE.match(after) or (v >= 100 and not re.match(r"\s*of\b", after, re.IGNORECASE)):
-                    spans.append((m.start(), m.end()))
+                    cover(m)
                     continue
                 add(m, "percent", v)
             elif kind == "in":
@@ -257,7 +289,11 @@ def extract_claims(text: str) -> list[Claim]:
                 add(m, "ratio", float({"twice": 2, "double": 2, "triple": 3}[m.group("word").lower()]))
 
     for pat, value, band in _VAGUE:
+        if len(claims) >= limit:
+            break
         for m in pat.finditer(text):
+            if len(claims) >= limit:
+                break
             if taken(m) or any(s < m.start() < e for s, e in reaches):
                 continue
             noun = m.groupdict().get("noun") or ""
@@ -569,7 +605,7 @@ class CounterpointEngine:
     def _verdict(self, claim: Claim, fact: Fact) -> dict:
         delta = round(claim.value - fact.value, 1)
         gap = abs(delta)
-        said, real = self._fmt(claim.value), self._fmt(fact.value)
+        said = self._fmt(claim.value)
         if claim.quantifier == "vague" and claim.band:
             low, high = claim.band
             fits = low <= fact.value <= high

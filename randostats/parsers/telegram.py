@@ -65,15 +65,26 @@ def _chats(payload: dict) -> list[dict]:
     return []
 
 
-def parse(data: bytes, self_name: str) -> Iterable[Message]:
-    if archive.is_zip(data):
-        payloads = [doc for _, doc in archive.json_files(data, contains="result.json")]
-        if not payloads:
-            payloads = [doc for _, doc in archive.json_files(data)]
-    else:
-        payloads = [json.loads(data.decode("utf-8-sig", errors="replace"))]
+def _payloads(data: bytes) -> Iterable[object]:
+    """The export documents, one at a time.
 
-    for payload in payloads:
+    Holding them all at once meant an archive of large documents was in memory
+    twice over: as parsed JSON here and as the messages built from it.
+    """
+    if not archive.is_zip(data):
+        yield json.loads(data.decode("utf-8-sig", errors="replace"))
+        return
+    found = False
+    for _, doc in archive.json_files(data, contains="result.json"):
+        found = True
+        yield doc
+    if not found:
+        for _, doc in archive.json_files(data):
+            yield doc
+
+
+def parse(data: bytes, self_name: str) -> Iterable[Message]:
+    for payload in _payloads(data):
         if not isinstance(payload, dict):
             continue
         me = payload.get("personal_information") or {}

@@ -16,17 +16,29 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Iterable
+from itertools import chain, islice
+from typing import Iterable, Iterator
 
 from ..models import Message
 
 # Timestamp, then " - " or "] ", then "Sender: text".
+#
+# Every run of whitespace here belongs to exactly one construct, and the
+# sender cannot start with whitespace. That is not style: the earlier pattern
+# put three whitespace quantifiers in a row (one inside `time`, two in the
+# separator) next to a sender that also accepts spaces, so a line that never
+# reaches its ":" made the engine try every way of dividing the spaces between
+# them. A 4 KB upload of one such line cost 22 s of CPU, and the cost is
+# quadratic in the length of the line, which no line- or file-count bound can
+# reach. Pinning each `\s*` to the thing that must follow it - a "]", a dash,
+# or a non-space sender - leaves exactly one way to divide them, and the same
+# line is now linear (400 KB in 0.014 s).
 _LINE = re.compile(
     r"""^‎?\[?
         (?P<date>\d{1,4}[./-]\d{1,2}[./-]\d{1,4}),?\s+
-        (?P<time>\d{1,2}:\d{2}(?::\d{2})?\s*(?:[APap]\.?[Mm]\.?)?)
-        \]?\s*[-–]?\s*
-        (?P<sender>[^:]{1,80}?):\s
+        (?P<time>\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap]\.?[Mm]\.?)?)
+        (?:\s*\])?(?:\s*[-–])?\s*
+        (?P<sender>[^:\s][^:]{0,79}?):\s
         (?P<text>.*)$""",
     re.VERBOSE,
 )
@@ -46,6 +58,30 @@ def _clean_line(raw: str) -> str:
     return _BIDI.sub("", raw).strip()
 
 
+# A line can match _LINE and still carry a date no format parses
+# ("99/99/9999, 99:99 - a: x"), and each of those costs a failed strptime for
+# every date and time format there is. A crafted file of nothing else used to
+# cost 23 seconds of CPU per megabyte, so stop reading one that never parses.
+# Counting only *consecutive* failures would not help: one parseable line
+# every thousand resets it and the cost comes straight back.
+MAX_UNPARSEABLE = 1000
+
+# How much of the file is read before the first message comes out. One export
+# is one conversation written in one date format, so which way round the dates
+# are and who speaks in it are both settled within the opening lines; reading
+# the whole file to answer them is what stopped the give-up above from
+# bounding anything at all. It built a Match object per line for the whole
+# upload - 8 s and 1.2 GB for 64 MB of it - before looking at a single one,
+# and the give-up cannot fire until that is done. A group whose third
+# participant says nothing in the first five thousand lines is filed under
+# the name of the second, which is the price of the bound.
+HEAD_LINES = 5000
+
+# What str.splitlines() splits on. Splitting the whole file at once is a list
+# of millions of strings; this yields them one at a time instead, so a file
+# that is going to be refused is never fully materialised.
+_LINE_BREAK = re.compile("\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+
 _DATE_FORMATS = (
     "%m/%d/%y", "%m/%d/%Y", "%d/%m/%y", "%d/%m/%Y",
     "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d",
@@ -58,8 +94,21 @@ def looks_like_whatsapp(head: bytes) -> bool:
     return any(_LINE.match(_clean_line(line)) for line in text.splitlines()[:20])
 
 
-def _parse_timestamp(date: str, time: str, day_first: bool | None) -> datetime | None:
+def _parse_timestamp(date: str, time: str, day_first: bool | None,
+                     known: tuple[str, str] | None = None) -> tuple[datetime | None, tuple[str, str] | None]:
+    """The moment, and the pair of formats that read it.
+
+    One export is written in one format, so pass the pair that worked last
+    time back in as ``known`` and the rest of the file costs one attempt a
+    line instead of up to forty-eight.
+    """
     time = time.replace("a.m.", "AM").replace("p.m.", "PM").replace(" ", " ").strip()
+    stamp = f"{date} {time}"
+    if known is not None:
+        try:
+            return datetime.strptime(stamp, f"{known[0]} {known[1]}"), known
+        except ValueError:
+            pass
     candidates = list(_DATE_FORMATS)
     if day_first is True:
         candidates.sort(key=lambda f: 0 if f.startswith("%d") else 1)
@@ -68,10 +117,20 @@ def _parse_timestamp(date: str, time: str, day_first: bool | None) -> datetime |
     for dfmt in candidates:
         for tfmt in _TIME_FORMATS:
             try:
-                return datetime.strptime(f"{date} {time}", f"{dfmt} {tfmt}")
+                return datetime.strptime(stamp, f"{dfmt} {tfmt}"), (dfmt, tfmt)
             except ValueError:
                 continue
-    return None
+    return None, known
+
+
+def _iter_lines(text: str) -> Iterator[str]:
+    """``text.splitlines()``, one line at a time and without the list."""
+    start = 0
+    for brk in _LINE_BREAK.finditer(text):
+        yield text[start:brk.start()]
+        start = brk.end()
+    if start < len(text):
+        yield text[start:]
 
 
 def _guess_day_first(dates: list[str]) -> bool | None:
@@ -90,29 +149,41 @@ def _guess_day_first(dates: list[str]) -> bool | None:
 
 def parse(data: bytes, self_name: str, contact: str | None = None) -> Iterable[Message]:
     text = data.decode("utf-8-sig", errors="replace")
-    lines = text.splitlines()
-    matches = [(_LINE.match(_clean_line(line)), line) for line in lines]
-    day_first = _guess_day_first([m.group("date") for m, _ in matches if m][:500])
+    rest = _iter_lines(text)
+    head = list(islice(rest, HEAD_LINES))
+    opening = [m for m in (_LINE.match(_clean_line(line)) for line in head) if m]
+    day_first = _guess_day_first([m.group("date") for m in opening][:500])
 
     # The contact is whoever isn't the user; for a group, the export has no
     # name, so we fall back to the caller-provided name or a generic label.
-    senders: list[str] = []
-    for m, _ in matches:
-        if m and m.group("sender") not in senders:
-            senders.append(m.group("sender"))
+    # There are only three answers - nobody else, exactly one other, or more
+    # than one - so stop looking at two, and a file of nothing but distinct
+    # senders cannot make the roster itself expensive to build.
     self_key = _BIDI.sub("", self_name).strip().lower()
-    others = [s for s in senders if s.strip().lower() != self_key]
+    others: list[str] = []
+    for m in opening:
+        sender = m.group("sender")
+        if sender.strip().lower() != self_key and sender not in others:
+            others.append(sender)
+            if len(others) > 1:
+                break
     if contact is None:
         contact = others[0] if len(others) == 1 else ("Group chat" if others else self_name)
 
-    self_key = _BIDI.sub("", self_name).strip().lower()
     current: dict | None = None
-    for m, raw in matches:
+    known: tuple[str, str] | None = None
+    unparseable = 0
+    for raw in chain(head, rest):
+        m = _LINE.match(_clean_line(raw))
         if m:
             if current:
                 yield _finish(current, contact)
-            ts = _parse_timestamp(m.group("date"), m.group("time"), day_first)
+            ts, known = _parse_timestamp(m.group("date"), m.group("time"), day_first, known)
             if ts is None:
+                unparseable += 1
+                if unparseable > MAX_UNPARSEABLE:
+                    raise ValueError(f"gave up after {MAX_UNPARSEABLE} lines whose timestamp no known "
+                                     "format could read; this is not a WhatsApp export")
                 current = None
                 continue
             sender = m.group("sender").strip()

@@ -235,7 +235,7 @@
     ];
     const eyebrow = card.label ? `${card.label.toUpperCase()} · THEY SAID` : "THEY SAID";
     parts.push(`<text x="${pad}" y="100" font-family="system-ui, sans-serif" font-size="22" letter-spacing="3" ` +
-      `fill="${card.label ? warm : mute}">${esc(eyebrow)}</text>`);
+      `fill="${esc(card.label ? warm : mute)}">${esc(eyebrow)}</text>`);
 
     const claim = block(`“${card.claim}”`, { x: pad, y: 158, size: 34, fill: dim, width, maxLines: 2 });
     parts.push(claim.markup);

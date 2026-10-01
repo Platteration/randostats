@@ -1,0 +1,5 @@
+# pip-audit for the audit job in .github/workflows/ci.yml. requirements.txt beside
+# this is it and everything it runs on, each pinned with its hashes, compiled from
+# this directory with:
+#   pip-compile --generate-hashes --allow-unsafe --strip-extras requirements.in
+pip-audit==2.10.1

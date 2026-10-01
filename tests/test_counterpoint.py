@@ -232,3 +232,35 @@ def test_a_missing_house_voice_is_not_a_crash(tmp_path, monkeypatch):
         assert CounterpointEngine(seed=1, voice="house").respond("70% of people")
     finally:
         packs._voices.cache_clear()
+
+
+def test_a_wall_of_text_answers_a_bounded_number_of_claims():
+    """A pasted article is thousands of claims, each one a match, a rendered
+    answer and (with --llm) a paid call. Nobody reads the twenty-first."""
+    from randostats.counterpoint.engine import MAX_CLAIMS
+
+    text = " ".join(f"{i % 100}% of group{i} agree." for i in range(500))
+    assert len(extract_claims(text)) == MAX_CLAIMS
+    assert len(extract_claims(text, limit=5)) == 5
+    assert len(CounterpointEngine(seed=3).respond(text, per_claim=1)) <= MAX_CLAIMS
+
+
+def test_claim_extraction_does_not_slow_down_as_claims_pile_up():
+    """The overlap check used to rescan every span found so far, so the cost
+    grew with the square of the number of claims: seconds of pegged CPU for a
+    long paste. Ratios, not absolute times, so a slow machine still passes.
+    """
+    import time
+
+    def clock(n: int) -> float:
+        text = " ".join(f"{i % 100}% of group{i} agree." for i in range(n))
+        best = float("inf")
+        for _ in range(3):
+            start = time.perf_counter()
+            extract_claims(text, limit=10 ** 9)  # the ceiling would hide the growth
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    small, large = clock(1000), clock(4000)
+    # Four times the claims: linear is about 4x, the quadratic version was 13x.
+    assert large < small * 8, f"1,000 claims took {small:.3f}s but 4,000 took {large:.3f}s"

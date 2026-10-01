@@ -71,9 +71,12 @@ def test_overview_uses_shared_frontend_core():
 
 def test_repo_polish_docs_and_release_workflow_exist():
     assert (ROOT / "CONTRIBUTING.md").is_file()
-    release = ROOT / ".github" / "workflows" / "release.yml"
-    assert release.is_file()
-    text = release.read_text(encoding="utf-8")
-    assert 'tags:' in text and '"v*"' in text
+    # The release build is a job of ci.yml: the shared conventions allow one CI
+    # workflow, so it builds both distributions on every push rather than on
+    # tags alone, installs the wheel it built, and keeps them with the run.
+    workflows = ROOT / ".github" / "workflows"
+    assert not (workflows / "release.yml").exists()
+    text = (workflows / "ci.yml").read_text(encoding="utf-8")
     assert "python -m build" in text
-    assert "upload-artifact@v4" in text
+    assert "pip install dist/*.whl" in text
+    assert re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v4", text)

@@ -11,6 +11,13 @@ same magnitude that has nothing to do with it.
 Everything runs locally. Your messages go into a SQLite file on your machine
 and never leave it.
 
+Two things do leave, both opt-in and both named where they happen: the
+Counterpoint tab's **Listen** button uses your browser's speech recognition,
+which in Chrome and Edge means the audio is transcribed by the browser vendor
+rather than on your device, and starting with `--llm` sends the claim being
+answered to the optional service described further down this page. Neither one
+touches your imported messages.
+
 ## What it does
 
 | Tab | What you see |
@@ -22,7 +29,7 @@ and never leave it.
 | **Spelling** | Your most frequent misspellings with suggested corrections and an example, misspellings per 1,000 words, who you misspell things to, and (flipped) who misspells the most at you. Text-speak like "lol" and "gonna" is ignored, as are URLs and names. |
 | **Words & tone** | Most used words, emoji counts and favourites per person, and warm-minus-cold tone words by month and by person. Tone is a word count, not a mood reading: it cannot see sarcasm or "not great", and the app says so. |
 | **Wrapped** | The year on one 1080 × 1350 card: total messages, who you talk to most, busiest hour, reply times, after-midnight share, longest streak, your word, your emoji, your worst typo. Downloads as a 2× PNG. |
-| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari). A known myth is called a myth, with the source. A claim the facts cover is checked against the real figure ("close, but high: it's 62%, Gallup 2023"). "Studies show" and "everyone knows" get asked for their evidence. Then every claim like "70%", "seventy percent", "1 in 5", "most people", "up 40%", "15 to 30 times more likely" gets sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
+| **Counterpoint** | Type or *listen* (microphone, in Chrome/Edge/Safari; the audio is transcribed by the browser, which is a cloud service in Chrome and Edge). A known myth is called a myth, with the source. A claim the facts cover is checked against the real figure ("close, but high: it's 62%, Gallup 2023"). "Studies show" and "everyone knows" get asked for their evidence. Then every claim like "70%", "seventy percent", "1 in 5", "most people", "up 40%", "15 to 30 times more likely" gets sourced facts of the same size, a punchline, and a one-line note on the actual logical gap. There's also a "random spurious correlation" button. |
 | **Import** | WhatsApp exports, iMessage `chat.db`, Android "SMS Backup & Restore" XML, Telegram JSON, Instagram and Messenger downloads, Discord packages, or generic CSV/JSON. Zips are read in place, and the format is detected for you. |
 
 Every chart has a **Table** toggle and hover tooltips, and follows the viewer's
@@ -30,45 +37,6 @@ light or dark theme. **Click any bar, heatmap cell, word, or point on a line**
 to open the messages behind that number, filtered and searchable. Each person
 keeps the same colour everywhere, assigned once from overall volume so
 filtering never repaints the survivors.
-
-## Quick start
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python samples/make_sample.py        # optional: fake data to play with
-randostats serve                     # http://127.0.0.1:8765
-```
-
-Open the app, go to **Overview** or **Import**, and either click **Load sample data** or import
-your own export (see the help panel on the Import tab for how to export from each app).
-
-You can also import from the terminal:
-
-```bash
-randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
-randostats import ~/Library/Messages/chat.db --me "Me"
-randostats import telegram-export.zip --me "Your Name"
-randostats counter "seventy percent of people drink beer"
-```
-
-Where to find each export:
-
-| Source | Where |
-|---|---|
-| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
-| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
-| Android SMS | the "SMS Backup & Restore" app's XML file |
-| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
-| Instagram / Messenger | request your information in JSON, then import the zip |
-| Discord | Settings → Data & Privacy → Request all of my data |
-
-Discord only exports what you wrote, so an import from it shows nothing as
-received. The app says so when it notices, rather than letting you read a
-half-empty chart as a fact about your friends.
-
-The database lives at `data/randostats.db` by default; override with `--db` or
-`RANDOSTATS_DB`.
 
 ## Counterpoint with Claude (optional)
 
@@ -81,9 +49,15 @@ export ANTHROPIC_API_KEY=...        # or `ant auth login`
 randostats serve --llm
 ```
 
-The option only appears when a credential is actually found, and if a request
-fails, is refused, or returns something unusable, the rule-based punchline
-stays on screen rather than the answer disappearing.
+The option only appears when a credential is actually found, and it starts
+unticked: the claim is a thing that leaves your machine, so it is something you
+turn on rather than something you remember to turn off. If a request fails, is
+refused, or returns something unusable, the rule-based punchline stays on
+screen rather than the answer disappearing.
+
+The same fallback bounds the bill. No more than
+`RANDOSTATS_LLM_CALLS_PER_HOUR` (200) requests an hour are sent, after which
+the rule-based punchline is simply what you get.
 
 Claude only *chooses among and rephrases* the facts the engine already matched
 from `randostats/counterpoint/facts.json`. It is never asked to invent
@@ -139,6 +113,12 @@ numbers would be worse than slow ones.
 needs none of your messages — only something someone said — so it is useful ten
 seconds after you open it. Install it to the home screen and the shell works
 offline; the answers still come from the app on your machine.
+
+A phone is another machine, and the server answers only to loopback names
+until told otherwise, so open `/m` from a phone by serving under a name the
+phone can reach, for example `randostats serve --host 0.0.0.0 --allow-host
+laptop.local`. Read what that costs under [Running it](#running-it) first: the
+name you add is one the server trusts with every message you imported.
 
 Type or paste the statistic, or use your keyboard's dictation key. **Hands-free
 listening is deliberately not offered up front.** On iOS the Speech Recognition
@@ -202,18 +182,98 @@ statement, a short noun-phrase form for generated sentences, a source, and a
 year. Values are approximate and dated; if you add facts, keep the source and
 year and run the tests, which check the file is well formed.
 
+## Running it
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python samples/make_sample.py        # optional: fake data to play with
+randostats serve                     # http://127.0.0.1:8765
+```
+
+Open the app, go to **Overview** or **Import**, and either click **Load sample data** or import
+your own export (see the help panel on the Import tab for how to export from each app).
+
+It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses reads and
+writes that a browser tells it came from another site — anything carrying
+`Sec-Fetch-Site: cross-site`, or an `Origin` that is not the name it was asked
+under. A request that says nothing about where it came from is answered: that
+is what keeps `curl` and `randostats import` working, and it is also what an
+older browser sends, since Firefox before 90 and Safari before 16.4 attach no
+`Sec-Fetch-Site` and a `no-cors` GET carries no `Origin` on any browser at
+all. So that check is a latch rather than a wall. What does not depend on it
+is that every memoised view is keyed on a value this app chose rather than on
+whatever arrived — one of the five conversation gaps in the menu, a row count
+clamped to 200, a name the store actually holds — so the cheap trick of
+varying a parameter to make the machine walk your whole history again has
+nothing left to vary but the row count. There is no login, so whatever reaches
+the port can read every message you imported, and a page on the internet can
+point a name it owns at 127.0.0.1 and try. To reach it under another name,
+say which:
+
+```bash
+randostats serve --host 0.0.0.0 --allow-host laptop.lan
+```
+
+Those are not two independent guards. "Another site" is measured against the
+names this server answers to, so a name you add with `--allow-host` is a name
+it trusts completely: any page that can make your browser resolve that name to
+this machine — a hostile router, DNS on the local network, or plain DNS
+rebinding for `'*'` — can then read and delete everything, exactly as the
+front end can. Add a name only on a network where you would accept that.
+
+You can also import from the terminal:
+
+```bash
+randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
+randostats import ~/Library/Messages/chat.db --me "Me"
+randostats import telegram-export.zip --me "Your Name"
+randostats counter "seventy percent of people drink beer"
+```
+
+Where to find each export:
+
+| Source | Where |
+|---|---|
+| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
+| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
+| Android SMS | the "SMS Backup & Restore" app's XML file |
+| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
+| Instagram / Messenger | request your information in JSON, then import the zip |
+| Discord | Settings → Data & Privacy → Request all of my data |
+
+Discord only exports what you wrote, so an import from it shows nothing as
+received. The app says so when it notices, rather than letting you read a
+half-empty chart as a fact about your friends.
+
+The database lives at `data/randostats.db` by default; override with `--db` or
+`RANDOSTATS_DB`.
+
 ## Development
 
 ```bash
-pytest            # parsers, stats, counterpoint, API
+ruff check .                         # pyflakes and the pycodestyle errors
+pytest -q                            # parsers, stats, counterpoint, API, security, timestamps
 ```
+
+CI runs both on Python 3.10 and 3.12, with and without the `llm` extra,
+then installs the built package and runs it from outside the checkout, which
+is the only way to tell that the data files ship. A separate job runs
+`pip-audit`, pinned with its dependencies by hash, over the declared
+dependencies and the `llm` extra twice: at the newest versions the ranges in
+`pyproject.toml` resolve to on the day, and at the declared floors
+(`.github/audit/floors.py`), which `pip install .` keeps in an environment
+that already has them. A version between a floor and the newest release is
+audited by neither.
 
 For contributor setup, frontend checks, and project conventions, see
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-Version tags matching `v*` build a wheel and source distribution in GitHub Actions, smoke-test the wheel, and retain the output as a workflow artifact. Publishing remains a deliberate manual step.
+The packaging job builds a wheel and a source distribution with `python -m build`,
+installs the wheel, runs it from outside the checkout, and keeps both files as a
+workflow artifact of that run. Publishing remains a deliberate manual step.
 
-Layout:
+## Project layout
 
 ```
 randostats/

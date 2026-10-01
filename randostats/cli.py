@@ -16,9 +16,19 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("serve", help="run the web app")
-    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default: %(default)s). There is no login: bind anything wider "
+                        "and every message you have imported is readable, and deletable, by whoever "
+                        "reaches the port.")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
+    s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                   help="also answer requests whose Host header is NAME (repeatable). Only loopback names are "
+                        "served by default, so a page on the internet cannot point a name it owns at this port. "
+                        "NAME becomes a name this server trusts completely: the cross-site check measures "
+                        "'another site' against the names served, so any page that can make a browser resolve "
+                        "NAME to this machine can read and delete everything, exactly as the front end can. "
+                        "Pass '*' to accept any name at all, which is that with nothing left to resist it.")
 
     i = sub.add_parser("import", help="import an export file from the terminal")
     i.add_argument("file", type=Path)
@@ -34,23 +44,52 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         import uvicorn
 
-        from .api import create_app
+        from .api import LOOPBACK_HOSTS, create_app
 
-        uvicorn.run(create_app(args.db, use_llm=args.llm), host=args.host, port=args.port)
+        # Binding to a name of your own means browsing to it, so it has to be
+        # served; 0.0.0.0 and :: are binds, not names, and say nothing about
+        # what a browser will ask for.
+        hosts = [*LOOPBACK_HOSTS, *args.allow_host]
+        if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
+            hosts.append(args.host)
+        # "" is a bind-all, exactly as the line above says: uvicorn hands it
+        # straight to bind(), and bind(("", port)) is every interface. Filing
+        # it with the loopback names here let the widest bind of the three be
+        # the one that said nothing.
+        if args.host not in LOOPBACK_HOSTS:
+            # There is no password on any of this. Say so before it is served.
+            print(f"warning: serving on {args.host or '0.0.0.0'}, which is not just this machine.\n"
+                  "         Nothing here asks for a password: anyone who can reach this port can read,\n"
+                  "         search and export every message you have imported, and delete the lot.\n"
+                  "         Bind 127.0.0.1 (the default) unless you mean it.", file=sys.stderr)
+            if args.llm:
+                # The warning above is about the data. --llm also hands out a
+                # credential that costs money, which is a separate decision.
+                print("         With --llm, they can also make this server call the Anthropic API on your\n"
+                      "         credential. RANDOSTATS_LLM_CALLS_PER_HOUR caps how much of that it will do.",
+                      file=sys.stderr)
+        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
         return 0
 
     if args.cmd == "import":
         data = args.file.read_bytes()
         fmt = args.format
-        if fmt == "auto":
-            fmt = parsers.detect_format(args.file.name, data) or ""
-            if not fmt:
-                print("could not detect format; pass --format", file=sys.stderr)
-                return 2
-        if fmt == "whatsapp" and args.contact:
-            msgs = list(parsers.whatsapp.parse(data, args.me, contact=args.contact))
-        else:
-            msgs = parsers.parse(fmt, data, args.me)
+        try:
+            if fmt == "auto":
+                fmt = parsers.detect_format(args.file.name, data) or ""
+                if not fmt:
+                    print("could not detect format; pass --format", file=sys.stderr)
+                    return 2
+            if fmt == "whatsapp" and args.contact:
+                msgs = list(parsers.whatsapp.parse(data, args.me, contact=args.contact))
+            else:
+                msgs = parsers.parse(fmt, data, args.me)
+        except ValueError as exc:
+            # A refused file (entities, a zip claiming too much, a chat log
+            # whose timestamps read as nothing) is the user's problem to fix,
+            # not a crash to show them a traceback for.
+            print(f"could not parse as {fmt}: {exc}", file=sys.stderr)
+            return 1
         if not msgs:
             print(f"parsed as {fmt} but found no messages; check the format and your name", file=sys.stderr)
             return 1

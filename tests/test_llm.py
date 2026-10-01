@@ -7,7 +7,9 @@ have must end in None, never an exception that fails the request.
 
 from __future__ import annotations
 
-import json
+import logging
+import time
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +17,11 @@ from fastapi.testclient import TestClient
 
 from randostats.api import create_app
 from randostats.counterpoint import CounterpointEngine, llm
+
+
+# The app only answers to the names it is meant to be reached by, so a test
+# client has to use one of them (the default "testserver" is not one).
+LOCAL = "http://localhost"
 
 
 @pytest.fixture(autouse=True)
@@ -120,7 +127,7 @@ def test_the_off_switch_wins_over_a_working_credential(monkeypatch):
 def test_the_endpoint_degrades_when_claude_says_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", lambda claim, group: None)
-    with TestClient(create_app(tmp_path / "llm.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm.db", use_llm=True), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is True
         body = client.post("/api/counterpoint", json={"text": "70% of people drink beer"}).json()
         assert body["results"], "the rule-based answer must still be there"
@@ -137,7 +144,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", sharpen)
-    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True), base_url=LOCAL) as client:
         body = client.post("/api/counterpoint", json={
             "text": "70% of people drink beer, and dinosaurs were 700 times older"}).json()
     assert len(calls) == 2, f"expected one call per claim, got {calls}"
@@ -146,7 +153,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
 
 def test_llm_is_off_unless_asked_for(tmp_path):
-    with TestClient(create_app(tmp_path / "off.db", use_llm=False)) as client:
+    with TestClient(create_app(tmp_path / "off.db", use_llm=False), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is False
         assert "llm" not in client.post("/api/counterpoint", json={"text": "70% of people"}).json()
 
@@ -188,5 +195,91 @@ def test_a_broken_credential_probe_never_stops_the_app_starting(monkeypatch, tmp
 
     monkeypatch.setattr(llm, "_get_client", explode)
     assert llm.available() is False
-    with TestClient(create_app(tmp_path / "probe.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "probe.db", use_llm=True), base_url=LOCAL) as client:
         assert client.get("/api/status").json()["llm"] is False
+
+
+def test_one_request_cannot_fan_out_into_unlimited_paid_calls(tmp_path, monkeypatch):
+    """Every distinct claim was one Claude request, and a pasted article holds
+    hundreds. The rule-based answers still cover the rest."""
+    from randostats.api import MAX_LLM_GROUPS
+
+    calls: list[str] = []
+
+    def sharpen(claim_text, group):
+        calls.append(claim_text)
+        return {"fact_id": group[0].fact.id, "punchline": "p", "logic_gap": "g", "model": "stub"}
+
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "sharpen", sharpen)
+    text = " ".join(f"{i + 1}% of group{i} agree." for i in range(30))
+    with TestClient(create_app(tmp_path / "fanout.db", use_llm=True), base_url=LOCAL) as client:
+        body = client.post("/api/counterpoint", json={"text": text}).json()
+    assert len(body["results"]) > MAX_LLM_GROUPS, "the rule-based answers are not capped"
+    assert len(calls) <= MAX_LLM_GROUPS, f"{len(calls)} paid calls for one request"
+
+
+def test_many_requests_cannot_spend_without_limit(monkeypatch, counterpoints):
+    """Capping one request's fan-out bounds the fan-out, not the bill.
+
+    Nothing counted how many requests arrived, so whoever could reach a
+    widened port could hold the owner's Anthropic account open at four billed
+    calls a POST. Past the hour's ceiling this has to do what a missing
+    credential already does: fall back, quietly, to the rule-based line.
+    """
+    made: list[dict] = []
+
+    def parse(**kwargs):
+        made.append(kwargs)
+        return reply(counterpoints[0].fact.id)
+
+    monkeypatch.setattr(llm, "_client", SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(parse=parse))))
+    # A ceiling low enough to reach, and a window that starts empty, so what
+    # is counted is this test's and not whatever else ran in this process.
+    ceiling = 3
+    monkeypatch.setattr(llm, "MAX_CALLS_PER_HOUR", ceiling)
+    monkeypatch.setattr(llm, "_calls", deque())
+
+    got = [llm.sharpen("70% of people drink beer", counterpoints) for _ in range(ceiling * 3)]
+    assert len(made) == ceiling, f"{len(made)} calls billed against a ceiling of {ceiling}"
+    # Past it the caller is not failed, only unsharpened.
+    assert all(g is not None for g in got[:ceiling])
+    assert all(g is None for g in got[ceiling:])
+
+
+def test_the_ceiling_is_reported_once_a_window_not_once_a_call(monkeypatch, counterpoints, caplog):
+    """Bounding the bill must not hand the same caller an unbounded log.
+
+    Every refused call wrote a WARNING, and a refused call is free: four lines
+    per POST, for as long as whoever reached the port keeps posting, and with
+    no logging configured that is a stderr the operator is usually
+    redirecting to a file. The operator needs to know the ceiling was
+    reached, not how many times.
+    """
+    monkeypatch.setattr(llm, "MAX_CALLS_PER_HOUR", 0)
+    monkeypatch.setattr(llm, "_calls", deque())
+    monkeypatch.setattr(llm, "_warned_at", float("-inf"))
+    refused = 25
+
+    with caplog.at_level(logging.WARNING, logger=llm.__name__):
+        for _ in range(refused):
+            assert llm.sharpen("70% of people drink beer", counterpoints) is None
+        said = [r for r in caplog.records if "over" in r.getMessage()]
+        assert len(said) == 1, f"{refused} refusals wrote {len(said)} lines"
+        assert str(llm.MAX_CALLS_PER_HOUR) in said[0].getMessage(), "and it has to say what the ceiling is"
+
+        # Once a window, though, not once ever: an hour later the operator is
+        # told again, or a ceiling reached every day looks like a one-off.
+        monkeypatch.setattr(llm, "_warned_at", time.monotonic() - llm._WINDOW_SECONDS - 1)
+        assert llm.sharpen("70% of people drink beer", counterpoints) is None
+        assert len([r for r in caplog.records if "over" in r.getMessage()]) == 2
+
+
+def test_the_paid_call_cannot_hold_a_worker_thread_for_ten_minutes(monkeypatch, counterpoints):
+    """`counterpoint` is a sync endpoint, so a stalled call occupies an anyio
+    worker for as long as it stalls, and the SDK's own default is 600 s."""
+    seen: dict = {}
+    monkeypatch.setattr(llm, "_client", fake_client(reply(counterpoints[0].fact.id), seen=seen))
+    monkeypatch.setattr(llm, "_calls", deque())
+    llm.sharpen("70% of people drink beer", counterpoints)
+    assert 0 < seen["timeout"] < 600, "the SDK's ten-minute default is back"

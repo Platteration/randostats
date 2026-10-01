@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  # Weekly, for a tree nobody pushes to: GitHub runs a schedule from the default branch
+  # only, where an advisory or a build that has rotted then shows within a week. Not at
+  # the top of the hour, a high-load time when scheduled runs can be delayed or dropped
+  # (CONVENTIONS.md, "CI").
+  schedule:
+    - cron: "17 6 * * 1"
+
+# A newer run for the same ref supersedes an in-flight one. On the default branch the
+# weekly run shares the group with pushes; whichever is cancelled, the other tests the
+# branch's newest commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+        # The llm extra is optional. Test the install the README recommends as
+        # well as the full one, or a test that needs the SDK hides its own
+        # dependency behind CI always having it.
+        extras: ["dev", "dev,llm"]
+    name: py${{ matrix.python-version }} [${{ matrix.extras }}]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          # What setup-python keys the cache on when no requirements.txt exists,
+          # named, since its default glob would otherwise find the audit job's.
+          cache-dependency-path: pyproject.toml
+
+      - run: pip install -e ".[${{ matrix.extras }}]"
+
+      - run: ruff check .
+
+      - run: pytest -q
+
+      # The conventions test again, on its own and without pytest, as an npm repository
+      # runs `npm run test:conventions`: no pytest setting can keep it from running here.
+      - run: python tests/test_conventions.py
+
+      # The front end has no build step, so this is the only check that it parses.
+      - run: |
+          node --check randostats/static/app.js
+          node --check randostats/static/ui-state.js
+          node --check randostats/static/overview.js
+          node --check randostats/static/m.js
+          node --check randostats/static/m-sw.js
+
+  # A job of its own, so that a newly published advisory turns this red on the next run
+  # (on the default branch, the weekly one at the latest) and leaves check meaning what
+  # it always meant. It audits what installing the app installs, the llm extra included,
+  # twice: at the newest versions the declared ranges resolve to on the day, and at the
+  # declared floors, which `pip install .` keeps in an environment that already holds
+  # them. A version between a floor and the newest release is audited by neither, so an
+  # advisory against such a version alone leaves this green.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            .github/audit/requirements.txt
+            pyproject.toml
+
+      # pip-audit and everything it runs on, pip included, each pinned with its
+      # hashes: a new release of an unpinned dependency could turn this red on an
+      # unchanged tree and look just like an advisory. requirements.txt is compiled
+      # from requirements.in beside it, and Dependabot's pip entry for that
+      # directory moves both. The throwaway venv `pip-audit -r` resolves into still
+      # gets the newest pip on the day: pip-audit upgrades it there itself.
+      - run: pip install --require-hashes -r .github/audit/requirements.txt
+
+      # The newest: the declared dependencies plus the llm extra, resolved into a
+      # throwaway venv, and not the dev extra (the test runner and the linter).
+      # `pip-audit .` would read [project] dependencies alone and miss the extra.
+      # randostats itself is listed as skipped: it is not on PyPI.
+      - run: pip-audit -r <(echo ".[llm]")
+
+      # The floors: every `>=` of the same requirements read as `==` by floors.py,
+      # with pip resolving everything else around them. A floor with an advisory,
+      # or floors that cannot be installed together, turn this red. `&&`, not a
+      # pipe or `<(...)`, whose exit status nothing reads: pip-audit passes an
+      # empty list, so a floors.py that fails has to fail the step.
+      - run: python .github/audit/floors.py > "$RUNNER_TEMP/floors.txt" && pip-audit -r "$RUNNER_TEMP/floors.txt"
+
+  packaged:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: non-editable install
+    # An editable install reads the data files out of the checkout, so it
+    # cannot tell whether the packs and voices are in the built package.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The wheel and source distribution a release would publish, built the way a
+      # release builds them, so the package that is tested is the one that ships.
+      - run: python -m pip install build
+
+      - run: python -m build
+
+      - run: pip install dist/*.whl
+
+      # Run it from somewhere the checkout is not importable.
+      - run: cd "$RUNNER_TEMP" && randostats counter "70% of people"
+
+      # Kept with the run, so a tagged commit's distributions can be taken from its
+      # run by hand. Publishing stays a deliberate manual step.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: randostats-dist
+          path: dist/*
+          if-no-files-found: error

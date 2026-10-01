@@ -64,8 +64,10 @@ def test_detect_format():
     assert parsers.detect_format("WhatsApp Chat with Alex.txt", WA_US.encode()) == "whatsapp"
 
 
+import inspect
 import io
 import json as _json
+import time
 import zipfile
 
 from randostats.parsers import discord, meta, telegram
@@ -215,3 +217,174 @@ def test_a_byte_order_mark_does_not_hide_the_format():
     assert parsers.detect_format("result.json", b"\xef\xbb\xbf" + payload) == "telegram"
     csv = b"contact,sender,direction,timestamp,text\nA,A,received,2024-01-01T10:00:00,hi\n"
     assert parsers.detect_format("x.csv", b"\xef\xbb\xbf" + csv) == "csv"
+
+
+def test_whatsapp_gives_up_on_a_file_of_timestamps_it_cannot_read():
+    """Every line matching the shape and none of them carrying a readable date
+    used to cost forty-eight failed strptime calls a line, for the length of
+    the file: 23 seconds of CPU per megabyte of it."""
+    junk = ("99/99/9999, 99:99 - a: x\n" * (whatsapp.MAX_UNPARSEABLE + 5)).encode()
+    with pytest.raises(ValueError, match="not a WhatsApp export"):
+        list(whatsapp.parse(junk, "Sam"))
+    # one real line every so often must not reset the budget and buy more work
+    mixed = (("99/99/9999, 99:99 - a: x\n" * 100 + "1/2/24, 9:15 PM - Alex: hi\n")
+             * (whatsapp.MAX_UNPARSEABLE // 100 + 1)).encode()
+    with pytest.raises(ValueError, match="not a WhatsApp export"):
+        list(whatsapp.parse(mixed, "Sam"))
+
+
+def test_whatsapp_stops_reading_the_file_it_gives_up_on(monkeypatch):
+    """Giving up is only a bound if it ends the work.
+
+    The give-up used to sit after ``[_LINE.match(l) for l in text.splitlines()]``
+    had run over the whole upload, so a Match object was built for every line
+    of the file before a single one was looked at: refusing the same crafted
+    input cost 0.58 s at 1 MB, 2.16 s at 16 MB, and 8.03 s and 1.2 GB at
+    64 MB. What it costs must not depend on how much follows the point it
+    gives up at, so the same input twice the length must be the same work.
+    """
+    def lines_examined(count: int) -> int:
+        examined = 0
+        pattern = whatsapp._LINE
+
+        class Counting:
+            def match(self, line):
+                nonlocal examined
+                examined += 1
+                return pattern.match(line)
+
+        monkeypatch.setattr(whatsapp, "_LINE", Counting())
+        junk = ("99/99/9999, 99:99 - a: x\n" * count).encode()
+        with pytest.raises(ValueError, match="not a WhatsApp export"):
+            list(whatsapp.parse(junk, "Sam"))
+        monkeypatch.undo()
+        return examined
+
+    short = lines_examined(whatsapp.MAX_UNPARSEABLE * 20)
+    long = lines_examined(whatsapp.MAX_UNPARSEABLE * 40)
+    assert short == long, "the work still grows with the file it is refusing"
+    assert long < whatsapp.MAX_UNPARSEABLE * 20, "and it is a small part of even the short one"
+
+
+def test_whatsapp_line_costs_its_length_not_its_length_squared():
+    """One long line must not be able to price itself out of the machine.
+
+    ``_LINE`` used to put three whitespace quantifiers in a row next to a
+    sender that also accepts spaces, so a line opening with a real timestamp
+    and then never reaching its ":" made the engine try every way of dividing
+    the spaces between them. The file below is 4 KB and took 22 s; at 400 KB
+    it is hours, and neither MAX_UNPARSEABLE nor HEAD_LINES can see it,
+    because both bound the number of *lines* and this is one line.
+
+    The budget comes from an ordinary line of the same length rather than
+    from a stopwatch, so the check says the same thing on a slow machine: a
+    line that fails to match may cost what a line that matches costs, and not
+    five orders of magnitude more.
+    """
+    run = 4000
+    hostile = ("1/1/23, 1:00 PM - Alex: hi\n1/1/23, 1:11 PM " + " " * run + "x").encode()
+    ordinary = ("1/1/23, 1:00 PM - Alex: hi\n1/1/23, 1:11 PM - Alex: " + "a" * run).encode()
+    # Both entry points run the pattern, and detect_format runs it on the
+    # event loop, before the import ever reaches a worker thread.
+    assert parsers.detect_format("chat.txt", hostile) == "whatsapp"
+
+    def cost(payload: bytes) -> float:
+        def once() -> float:
+            start = time.perf_counter()
+            parsers.detect_format("chat.txt", payload)
+            list(whatsapp.parse(payload, "Sam"))
+            return time.perf_counter() - start
+        return min(once() for _ in range(3))  # the minimum is the one the machine was not busy for
+
+    budget = max(cost(ordinary), 0.005) * 20
+    assert cost(hostile) < budget, "matching a single long line is superlinear again"
+
+
+def test_whatsapp_does_not_split_the_whole_upload_at_once():
+    """The list of lines was the other half of the cost: several times the
+    file in memory, built before anything could decide to stop."""
+    assert inspect.isgenerator(whatsapp._iter_lines("a\nb\n"))
+    for text in ("", "a", "a\n", "a\nb", "a\r\nb\n", "a\n\nb", "\u2028x\x85y\x0cz\n"):
+        assert list(whatsapp._iter_lines(text)) == text.splitlines(), repr(text)
+
+
+def test_whatsapp_tolerates_the_odd_unreadable_line():
+    export = "99/99/9999, 99:99 - a: nonsense\n1/2/24, 9:15 PM - Alex: hey\n"
+    assert [m.text for m in whatsapp.parse(export.encode(), "Sam")] == ["hey"]
+
+
+def test_whatsapp_reuses_the_format_that_worked():
+    """One export is written in one format; finding it again per line was the
+    other half of the cost above."""
+    assert whatsapp._parse_timestamp("14/03/2024", "23:59", None) == (
+        datetime(2024, 3, 14, 23, 59), ("%d/%m/%Y", "%H:%M"))
+    known = ("%d/%m/%Y", "%H:%M")
+    assert whatsapp._parse_timestamp("15/03/2024", "00:01", None, known)[0] == datetime(2024, 3, 15, 0, 1)
+    # a line the remembered pair cannot read still gets the full search
+    assert whatsapp._parse_timestamp("2024-03-16", "00:02", None, known)[0] == datetime(2024, 3, 16, 0, 2)
+
+
+ENTITY_BOMB = ('<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE smses [<!ENTITY a "aaaaaaaaaa">'
+               '<!ENTITY b "&a;&a;&a;&a;&a;">]><smses><sms address="1" date="1700000000000" '
+               'type="1" body="&b;"/></smses>')
+
+
+def test_smsbackup_refuses_a_utf16_document():
+    """The entity guard reads bytes, and expat picks its encoding off the byte
+    order mark: in UTF-16 a declaration carries no "<!ENTITY" bytes at all."""
+    utf16 = ENTITY_BOMB.encode("utf-16")
+    assert b"<!ENTITY" not in utf16  # which is why the old guard missed it
+    with pytest.raises(ValueError, match="UTF-16"):
+        list(smsbackup.parse(utf16, "Sam"))
+    assert b"<!ENTITY" in ENTITY_BOMB.encode("utf-8")  # and the byte guard still catches this one
+    with pytest.raises(ValueError, match="entities"):
+        list(smsbackup.parse(ENTITY_BOMB.encode("utf-8"), "Sam"))
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"])
+def test_smsbackup_refuses_a_utf16_document_with_no_byte_order_mark(encoding):
+    """A mark is not what expat needs to switch encodings.
+
+    A document entity can only begin with an ASCII character, so with no mark
+    at all expat reads the encoding off where the NUL bytes fall in the first
+    four: "<?xml" is a "<" then a NUL then a "?" then a NUL, little-endian,
+    and the NULs the other way round big-endian; expat expands the
+    declarations from there. Refusing only the marked form left the whole hole
+    open, and the marked form was all the test used.
+    """
+    raw = ENTITY_BOMB.encode(encoding)
+    assert raw[:2] not in (b"\xff\xfe", b"\xfe\xff"), "no mark to be caught by"
+    assert b"<!ENTITY" not in raw, "and no bytes a UTF-8 scan would recognise"
+    with pytest.raises(ValueError, match="UTF-16"):
+        list(smsbackup.parse(raw, "Sam"))
+    # and through the entry point /api/import uses when fmt is forced
+    with pytest.raises(ValueError, match="UTF-16"):
+        parsers.parse("smsbackup", raw, "Sam")
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_smsbackup_refuses_a_utf16_document_that_does_not_start_with_a_tag(encoding):
+    """Nor is it enough to know the handful of prefixes "<?xml" encodes to.
+
+    With no declaration a document may open on whitespace, and expat still
+    reads UTF-16 off it: what it looks for is a NUL where an ASCII character
+    has to be, not any particular tag. So that is what is refused.
+    """
+    doc = ('\n <!DOCTYPE smses [<!ENTITY a "aaaaaaaaaa">]>'
+           '<smses><sms address="1" date="1700000000000" type="1" body="&a;"/></smses>')
+    raw = doc.encode(encoding)
+    assert raw[:4] not in (b"<\x00?\x00", b"\x00<\x00?"), "not a prefix anyone would list"
+    with pytest.raises(ValueError, match="UTF-16"):
+        list(smsbackup.parse(raw, "Sam"))
+
+
+def test_telegram_reads_an_archive_one_document_at_a_time():
+    """Holding every document at once meant a small archive of large exports
+    was in memory twice: as parsed JSON and as the messages built from it."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(3):
+            zf.writestr(f"DataExport{i}/result.json", _json.dumps(TELEGRAM))
+    seen = list(telegram._payloads(buf.getvalue()))
+    assert len(seen) == 3 and all(isinstance(d, dict) for d in seen)
+    assert inspect.isgenerator(telegram._payloads(buf.getvalue()))

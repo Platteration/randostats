@@ -378,7 +378,7 @@
   function sparkline(values, stroke = "var(--s1)", w = 96, h = 20) {
     const max = Math.max(1, ...values);
     const pts = values.map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * (h - 2) - 1}`);
-    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${pts.join(" L")}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/></svg>`;
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><path d="M${esc(pts.join(" L"))}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/></svg>`;
   }
 
   function table(cols, rows, labels) {
@@ -638,7 +638,7 @@
     const top = c.top_contact, colW = (W - PAD * 2 - 24) / 2;
     let y = 0;
     const parts = [`<rect width="${W}" height="${H}" fill="${surf}"/>`];
-    parts.push(`<rect x="0" y="0" width="${W}" height="10" fill="${hue[0]}"/>`);
+    parts.push(`<rect x="0" y="0" width="${W}" height="10" fill="${esc(hue[0])}"/>`);
     parts.push(T(PAD, 96, "RANDOSTATS", 24, { fill: mute, spacing: 3, weight: 600 }));
     parts.push(T(W - PAD, 96, String(year), 24, { fill: mute, anchor: "end", spacing: 2 }));
 
@@ -653,8 +653,8 @@
       parts.push(T(PAD + 26, y + 144, `${fmt(top.total)} messages · you wrote ${Math.round(100 * top.sent / top.total)}%`, 23, { fill: ink2 }));
       const barW = W - PAD * 2 - 52, x0 = PAD + 26, yb = y + 158;
       const sw = barW * top.sent / top.total;
-      parts.push(`<rect x="${x0}" y="${yb}" width="${Math.max(0, sw - 2)}" height="8" rx="4" fill="${hue[0]}"/>`);
-      parts.push(`<rect x="${x0 + sw}" y="${yb}" width="${barW - sw}" height="8" rx="4" fill="${hue[1]}"/>`);
+      parts.push(`<rect x="${x0}" y="${yb}" width="${Math.max(0, sw - 2)}" height="8" rx="4" fill="${esc(hue[0])}"/>`);
+      parts.push(`<rect x="${x0 + sw}" y="${yb}" width="${barW - sw}" height="8" rx="4" fill="${esc(hue[1])}"/>`);
       if (c.runner_up) parts.push(T(W - PAD - 26, y + 40, `then ${c.runner_up.contact} (${compact(c.runner_up.total)})`, 21, { fill: mute, anchor: "end" }));
     }
 
@@ -924,6 +924,14 @@
   async function refresh() {
     const st = await api("/api/status");
     state.llm = st.llm; $("#llm-label").hidden = !st.llm;
+    // The note above the microphone has to match what the server will actually
+    // do with what it hears. With --llm on, the claim and the words spoken
+    // around it go to Anthropic, so the sentence promising otherwise cannot
+    // stand; the box that does it is off until someone ticks it.
+    $("#listen-privacy-llm").textContent = st.llm
+      ? "Tick “sharpen with Claude” and the claim — including the words spoken around the number — "
+        + "is sent to Anthropic to be rephrased. Leave it unticked and nothing else here leaves your machine."
+      : "Nothing else here leaves your machine.";
     $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
     if (st.self_name) $("#self-name").value = st.self_name;
     const contacts = st.messages ? await api("/api/stats/contacts") : [];

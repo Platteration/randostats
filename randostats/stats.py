@@ -11,7 +11,6 @@ from collections import Counter, defaultdict
 from functools import lru_cache
 from datetime import timedelta
 from statistics import median
-from typing import Iterable
 
 from .models import Message
 
@@ -142,8 +141,15 @@ def contact_frequency(messages: list[Message], limit: int | None = None) -> list
 # ---------------------------------------------------------------------------
 
 def timing(messages: list[Message], contact: str | None = None) -> dict:
-    """When messages happen: hour-of-day, weekday, a 7x24 heatmap, monthly volume, and reply latency."""
-    msgs = [m for m in messages if contact is None or m.contact == contact]
+    """When messages happen: hour-of-day, weekday, a 7x24 heatmap, monthly volume, and reply latency.
+
+    An empty ``contact`` means everyone, as it does in every other filter here
+    (``search``, ``emoji_stats``, ``misspellings``, ``tone`` all spell it
+    ``if contact and ...``). Spelled ``contact is None``, this one alone read
+    ``?contact=`` as "nobody", so the same query answered two different ways
+    depending on which endpoint it was sent to.
+    """
+    msgs = [m for m in messages if not contact or m.contact == contact]
     if not msgs:
         return {"by_hour": [], "by_weekday": [], "heatmap": [], "by_month": [], "busiest_day": None,
                 "reply_latency": None, "peak_hour": None, "peak_weekday": None}
@@ -264,6 +270,12 @@ def word_frequency(messages: list[Message], direction: str | None = None, limit:
     return [{"word": w, "count": c} for w, c in counts.most_common(limit)]
 
 
+# How many distinct words the word-by-word memos below will hold. One Speller
+# lives for the life of the server, so unbounded dicts there were one entry
+# per distinct word ever checked, never returned.
+MEMO_WORDS = 200_000
+
+
 class Speller:
     """Thin wrapper around pyspellchecker so the dictionary loads once."""
 
@@ -272,23 +284,23 @@ class Speller:
 
         self.checker = SpellChecker(language=language)
         self.checker.word_frequency.load_words(SLANG)
-        self._cache: dict[str, bool] = {}
-        self._suggest_cache: dict[str, str | None] = {}
+        # Bounded like _is_noise: an import full of distinct junk should not
+        # be able to grow the resident set without limit.
+        self._misspelled = lru_cache(maxsize=MEMO_WORDS)(self._check)
+        self._suggestion = lru_cache(maxsize=MEMO_WORDS)(self._correct)
+
+    def _check(self, lw: str) -> bool:
+        return lw not in self.checker and lw.removesuffix("'s") not in self.checker
+
+    def _correct(self, lw: str) -> str | None:  # correction() is slow; it runs once per distinct word
+        corr = self.checker.correction(lw)
+        return corr if corr and corr != lw else None
 
     def is_misspelled(self, word: str) -> bool:
-        lw = word.lower().replace("’", "'")
-        if lw in self._cache:
-            return self._cache[lw]
-        bad = lw not in self.checker and lw.removesuffix("'s") not in self.checker
-        self._cache[lw] = bad
-        return bad
+        return self._misspelled(word.lower().replace("’", "'"))
 
     def suggest(self, word: str) -> str | None:
-        lw = word.lower()
-        if lw not in self._suggest_cache:  # correction() is slow; it runs once per distinct word
-            corr = self.checker.correction(lw)
-            self._suggest_cache[lw] = corr if corr and corr != lw else None
-        return self._suggest_cache[lw]
+        return self._suggestion(word.lower())
 
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -309,7 +321,7 @@ _REPEATED = re.compile(r"(.)\1{2,}")
 _STRETCHED = re.compile(r"(ha){2,}|(he){2,}|(lo)+l|o{3,}|a{3,}|e{3,}|y{3,}|z{2,}|m{3,}")
 
 
-@lru_cache(maxsize=200_000)
+@lru_cache(maxsize=MEMO_WORDS)
 def _is_noise(word: str) -> bool:
     """Laughter, keysmashes and text-speak, which no dictionary should judge."""
     lw = word.lower()
@@ -468,7 +480,12 @@ def conversation_summary(rows: list[dict]) -> dict:
 
 
 def group_members(messages: list[Message], contact: str) -> list[dict]:
-    """Per-person breakdown inside one conversation, which is what makes a group chat readable."""
+    """Per-person breakdown inside one conversation, which is what makes a group chat readable.
+
+    ``contact`` names one conversation; unlike the filters elsewhere in this
+    module there is no "everyone" to fall back on, so an empty name matches
+    nothing and the answer is the empty list.
+    """
     msgs = [m for m in messages if m.contact == contact]
     if not msgs:
         return []
