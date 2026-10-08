@@ -23,7 +23,8 @@ from randostats.store import Store
 STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
 APP_JS = STATIC / "app.js"
 # Every front end that puts somebody else's words on screen, not just the first.
-FRONT_ENDS = (APP_JS, STATIC / "m.js", STATIC / "overview.js", STATIC / "ui-state.js")
+FRONT_ENDS = (APP_JS, STATIC / "m.js", STATIC / "overview.js", STATIC / "ui-state.js",
+              STATIC / "login.js", STATIC / "guard.js")
 INDEX = STATIC / "index.html"
 
 
@@ -65,8 +66,13 @@ def test_security_headers_are_sent(client):
     csp = headers["content-security-policy"]
     assert "script-src 'self'" in csp and "object-src 'none'" in csp
     assert "'unsafe-eval'" not in csp
-    # the Wrapped card rasterises through a blob URL, so images need blob:
-    assert "img-src 'self' data: blob:" in csp
+    directives = dict(d.strip().split(" ", 1) for d in csp.split(";") if " " in d.strip())
+    # The Wrapped card and the phone's share card rasterise through blob: URLs, so
+    # images need blob:. Nothing loads a data: URL (measured in Chromium, e2e/), so
+    # the directive is exactly this and data: is not in it.
+    assert directives["img-src"] == "'self' blob:"
+    # and no inline style either: the charts set theirs through the CSSOM or a class
+    assert directives["style-src"] == "'self'"
     assert headers["x-content-type-options"] == "nosniff"
     assert client.get("/api/status").headers["content-security-policy"] == csp
 
@@ -934,18 +940,21 @@ def test_a_body_larger_than_the_cap_is_refused_before_it_is_parsed(client, monke
 
 
 def test_serving_beyond_loopback_says_what_that_costs(tmp_path, monkeypatch, capsys):
-    """--host 0.0.0.0 is a documented option and there is no login anywhere in
-    this app, so it has to say so."""
+    """--host 0.0.0.0 is a documented option. It needs RANDOSTATS_PASSWORD now (the
+    bind-all test below, and tests/test_auth.py), and with one it still says what
+    serving beyond this machine costs."""
     import uvicorn
 
     from randostats import cli
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+    monkeypatch.delenv("RANDOSTATS_PASSWORD", raising=False)
 
-    cli.main(["--db", str(tmp_path / "cli.db"), "serve"])
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve"]) == 0
     assert capsys.readouterr().err == "", "the loopback default warns about nothing"
 
-    cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0"])
+    monkeypatch.setenv("RANDOSTATS_PASSWORD", "correct horse battery")
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0"]) == 0
     warning = capsys.readouterr().err
     assert "warning" in warning and "password" in warning and "delete" in warning
 
@@ -960,7 +969,9 @@ def test_every_bind_all_says_it_is_a_bind_all(tmp_path, monkeypatch, capsys, hos
     INADDR_ANY, so `serve --host ""` served the unauthenticated API on the LAN
     and printed nothing. The line that builds the Host allow-list already
     counts "" as a bind rather than a name; the line that decides the warning
-    filed it with 127.0.0.1 and the two disagreed.
+    filed it with 127.0.0.1 and the two disagreed. A bind-all now needs a
+    password to start at all, so the same mistake would serve everything with
+    no password: each spelling is refused without one, and warned about with one.
     """
     import uvicorn
 
@@ -968,7 +979,14 @@ def test_every_bind_all_says_it_is_a_bind_all(tmp_path, monkeypatch, capsys, hos
 
     bound = {}
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: bound.update(kw))
-    cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host])
+    monkeypatch.delenv("RANDOSTATS_PASSWORD", raising=False)
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host]) == 2
+    assert bound == {}, "nothing was served"
+    refusal = capsys.readouterr().err
+    assert "RANDOSTATS_PASSWORD" in refusal and "serving on , " not in refusal
+
+    monkeypatch.setenv("RANDOSTATS_PASSWORD", "correct horse battery")
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host]) == 0
     assert bound["host"] == host, "whatever was asked for is what is bound"
     warning = capsys.readouterr().err
     assert "warning" in warning and "password" in warning and "delete" in warning

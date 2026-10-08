@@ -7,8 +7,10 @@
  * are switched on in the database, so a cached copy would have the phone
  * insisting on a fact count the desktop just changed.
  */
-const CACHE = "counterpoint-shell-v1";
-const SHELL = ["/m", "/static/m.css", "/static/m.js", "/manifest.webmanifest", "/static/icon-192.png"];
+const CACHE = "counterpoint-shell-v2";
+// guard.js too: /m loads it first, and offline a file this cache does not hold is
+// simply missing, so the page would open with no safety net and nothing to say so.
+const SHELL = ["/m", "/static/guard.js", "/static/m.css", "/static/m.js", "/manifest.webmanifest", "/static/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

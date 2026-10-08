@@ -19,7 +19,19 @@ guarantee. Reports are read and acted on in order of severity.
 
 In scope: the code in this repository, including anything it does with input
 that comes from outside it (files, share links, imported data, network
-responses, user-supplied text rendered into a page).
+responses, user-supplied text rendered into a page), and the app as a website:
+
+- the response headers `randostats/api.py` sets on every response (the
+  Content-Security-Policy and the others listed in README.md, "Deploy"), and
+  anything that runs script or loads a resource the policy should refuse;
+- the password gate (`RANDOSTATS_PASSWORD`, `randostats/auth.py`): a way to read
+  or change data without the password, to keep a session past sign-out, to
+  learn the password faster than the guess limit allows, or to be sent off the
+  site by the sign-in page;
+- a file served that is not part of the site.
+
+`/.well-known/security.txt` gives the same private reporting route. Its
+`Expires` date is renewed yearly; the test suite fails once it has passed.
 
 Out of scope: vulnerabilities in third-party dependencies that are already
 public and have an upstream fix, findings that require an attacker to already

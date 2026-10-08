@@ -14,19 +14,27 @@
     return parts.length > max ? parts.slice(0, max - 1).join("") + "…" : String(s);
   };
   const tip = $("#tooltip");
-  const state = { contacts: [], tables: new Set(), llm: false, session: null, hues: {} };
+  const state = { contacts: [], tables: new Set(), llm: false, session: null, hues: new Map() };
 
   // A contact keeps the same hue everywhere, assigned once from overall volume so
   // filtering a chart never repaints the survivors. Past eight people it's gray.
+  // A Map, because the keys are contact names out of an imported file, and a
+  // plain object answers "constructor" with a function.
   const assignHues = (rows) => {
-    state.hues = {};
-    rows.forEach((r, i) => { state.hues[r.contact] = i < 8 ? `var(--c${i + 1})` : "var(--muted)"; });
+    state.hues = new Map();
+    rows.forEach((r, i) => { if (i < 8) state.hues.set(r.contact, i + 1); });
   };
-  const hueOf = (name) => state.hues[name] || "var(--muted)";
-  const dot = (name) => `<i class="sw" style="background:${hueOf(name)}"></i>`;
+  const hueOf = (name) => state.hues.has(name) ? `var(--c${state.hues.get(name)})` : "var(--muted)";
+  // A class, not a style attribute: the policy is style-src 'self' with no
+  // 'unsafe-inline', so the browser refuses a style="" that markup carries.
+  const dot = (name) => `<i class="sw hue${Math.round(state.hues.get(name) || 0)}"></i>`;
 
+  // With a password set, a session that has ended (a restart, Sign out, thirty
+  // days) is answered 401: go and sign in, and come back to this tab after.
+  const signIn = () => location.assign(`/login?next=${encodeURIComponent(location.pathname + location.hash)}`);
   const api = async (path, opts) => {
     const r = await fetch(path, opts);
+    if (r.status === 401) { signIn(); throw new Error("sign in first"); }
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     return r.json();
   };
@@ -34,7 +42,12 @@
   // ---------- tiny SVG helpers ----------
   const el = (tag, attrs = {}, text) => {
     const e = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    // A style attribute is an inline style, which the policy refuses (style-src
+    // 'self', no 'unsafe-inline'). The same declarations through the CSSOM are
+    // not refused, and land with the same priority.
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "style") e.style.cssText = v; else e.setAttribute(k, v);
+    }
     if (text != null) e.textContent = text;
     return e;
   };
@@ -753,7 +766,7 @@
         <div class="punch">${esc(llm ? llm.punchline : chosen.lines[0])}</div>
         <div class="fact">${esc(chosen.fact.statement)}.</div>
         <div class="src">${esc(chosen.fact.source)}, ${esc(chosen.fact.year)} · ${chosen.claim.kind !== "percent" ? "nearest match" : chosen.gap === 0 ? "identical" : chosen.gap === 1 ? "1 point off" : chosen.gap + " points off"}</div>
-        ${others.map(o => `<div class="fact" style="margin-top:6px">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${esc(o.fact.year)})</span></div>`).join("")}
+        ${others.map(o => `<div class="fact also">Also: ${esc(o.lines[0])} <span class="src">(${esc(o.fact.source)}, ${esc(o.fact.year)})</span></div>`).join("")}
         <div class="gap"><b>The actual problem:</b> ${esc(llm ? llm.logic_gap : chosen.fallacy)}</div>
       </div>`;
     }).join("");
@@ -933,6 +946,7 @@
         + "is sent to Anthropic to be rephrased. Leave it unticked and nothing else here leaves your machine."
       : "Nothing else here leaves your machine.";
     $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
+    $("#sign-out").hidden = !st.auth;
     if (st.self_name) $("#self-name").value = st.self_name;
     const contacts = st.messages ? await api("/api/stats/contacts") : [];
     state.contacts = contacts;
@@ -945,5 +959,11 @@
     const tab = location.hash.slice(1);
     switchTab(tab && $("#tab-" + tab) ? tab : (st.messages ? "people" : "import"));
   }
+  $("#sign-out").addEventListener("click", async () => {
+    await api("/api/logout", { method: "POST" }).catch(() => {});
+    location.assign("/login");
+  });
   refresh().catch(err => { $("#status").textContent = "backend unreachable: " + err.message; });
+  // Everything above is wired: the safety net (guard.js) can stand down.
+  if (window.RandoGuard) window.RandoGuard.started();
 })();

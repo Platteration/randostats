@@ -57,12 +57,24 @@ jobs:
       - run: python tests/test_conventions.py
 
       # The front end has no build step, so this is the only check that it parses.
+      # tests/test_static_shell.py holds this list to every script in static/.
       - run: |
           node --check randostats/static/app.js
           node --check randostats/static/ui-state.js
           node --check randostats/static/overview.js
           node --check randostats/static/m.js
           node --check randostats/static/m-sw.js
+          node --check randostats/static/guard.js
+          node --check randostats/static/login.js
+
+      # The website: `randostats serve` started for real and both front ends driven
+      # in Chromium under the policy it sends (e2e/). Playwright is pinned in the e2e
+      # extra, and the browser is the one that release drives.
+      - run: pip install -e ".[e2e]"
+
+      - run: python -m playwright install --with-deps chromium
+
+      - run: pytest -q e2e
 
   # A job of its own, so that a newly published advisory turns this red on the next run
   # (on the default branch, the weekly one at the latest) and leaves check meaning what

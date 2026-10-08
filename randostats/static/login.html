@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sign in · randostats</title>
+<script src="/static/guard.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon-192.png">
+</head>
+<body class="page-card">
+<noscript><div class="guard-note">randostats needs JavaScript, and it is off for this site. Turn it on and reload: nothing here works without it.</div></noscript>
+<main class="site-card">
+  <div class="brand"><span class="logo">%</span> randostats</div>
+  <h1>Sign in</h1>
+  <p class="muted">This randostats was started with a password (RANDOSTATS_PASSWORD). Everyone who reaches it is asked for it.</p>
+  <form id="sign-in" class="sign-in-form">
+    <label>Password <input type="password" id="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+  <p id="sign-in-result" class="muted" role="status"></p>
+</main>
+<script src="/static/login.js"></script>
+</body>
+</html>

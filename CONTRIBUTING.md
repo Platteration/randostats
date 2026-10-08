@@ -30,13 +30,20 @@ Then open `http://127.0.0.1:8765`. You can import your own export or use the bun
 Run the same basic checks as CI:
 
 ```bash
+ruff check .
 pytest -q
 node --check randostats/static/app.js
 node --check randostats/static/m.js
 node --check randostats/static/m-sw.js
 node --check randostats/static/ui-state.js
 node --check randostats/static/overview.js
+node --check randostats/static/guard.js
+node --check randostats/static/login.js
+pip install -e ".[e2e]" && python -m playwright install chromium
+pytest -q e2e
 ```
+
+The last one drives both front ends in Chromium under the response headers the server sends, and fails on any Content Security Policy violation; a change that loads something new has to name it in the policy (`randostats/api.py` and README.md, "Deploy").
 
 If your change touches a parser, statistic, import identity, cache invalidation, Counterpoint matching, or another correctness-sensitive path, add a regression test that fails on the old behavior.
 

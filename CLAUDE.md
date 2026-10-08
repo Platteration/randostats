@@ -34,7 +34,9 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
 - **Untrusted input.** Contact names, senders and message text come from files
   other people wrote. Everything reaching `innerHTML` or a tooltip goes
   through `esc()`. `tests/test_security.py` walks `app.js` and fails on a
-  regression; do not weaken it.
+  regression; do not weaken it. Nothing writes a `style=""` attribute either:
+  the policy refuses inline styles, so a chart sets its declarations through
+  the CSSOM (`el()` does it for a `style` key) or a class (`dot()`'s `hueN`).
 - **A request model defined inside `create_app` breaks FastAPI.** Pydantic
   models for request bodies must be at module scope, or the endpoint 422s on
   every call. This has happened twice (`CounterRequest`, `PackConfig`).
@@ -73,8 +75,10 @@ from `app.js`, which is one closed IIFE. Consequences worth knowing:
 
 - `tests/test_security.py` parameterises its escaping lint over **both** front
   ends. Each duplicates `esc()`; neither may skip it. The desktop modules
-  (`overview.js`, `ui-state.js`) are in the same `FRONT_ENDS` list; a new static
-  module goes there too, or the lint never sees it.
+  (`overview.js`, `ui-state.js`) and the site's own scripts (`login.js`,
+  `guard.js`) are in the same `FRONT_ENDS` list; a new static module goes there
+  too, and in CI's `node --check` list, or neither sees it
+  (`tests/test_static_shell.py` fails until it is in both).
 - That lint follows multi-line template literals. It used to check only the line
   the sink was on, which let an unescaped value in a card template pass.
 - A second lint parses **every** template literal containing a tag, wherever it
@@ -83,15 +87,57 @@ from `app.js`, which is one closed IIFE. Consequences worth knowing:
   value to quiet the lint is no longer a way round it.
 - The service worker is served from `/sw.js`, not `/static/`, because scope
   defaults to the script's own directory. It must never cache `/api/` —
-  `counterpoint/packs` reflects database state.
+  `counterpoint/packs` reflects database state. Its `SHELL` holds every script
+  and stylesheet `m.html` loads, `guard.js` included (`tests/test_website.py`),
+  and `CACHE` changes name whenever `SHELL` does, or installed phones keep the
+  old list.
 - `navigator.share` must be called with no `await` in front of it, so the share
   PNG is rendered when the card is shown. There is a test for that.
 - Icons are committed PNGs; regenerate with `python samples/make_icons.py`.
 
+## The website
+
+randostats is a website as well as a local app, and `api.py` is the host:
+there is no `_headers`, `.htaccess` or proxy config holding the policy.
+
+- **One policy, written once.** `CSP`, `HEADERS` and `PERMISSIONS` in `api.py`,
+  put on every response by `decorate()` in the middleware and the 500 handler
+  (refusals, 404s and HEAD included); `CSP_HTTPS` and `HSTS` only when the
+  request's scheme is https. README's Deploy section prints the same block,
+  and `tests/test_website.py` holds the two equal: change both or neither.
+- **Every source is measured.** Each one was decided by `pytest -q e2e` (or a
+  scratch walk like it) with the policy as a response header, and removing any
+  of them breaks the walk but `worker-src`, which `script-src` would cover by
+  fallback and is stated on purpose. A new feature that loads something new fails the walk
+  until the policy names it; name it there, in README's table and in the block,
+  never as `'unsafe-inline'` or a wildcard. Trusted Types was measured and is
+  not adopted (README says why).
+- **The gate.** `auth.py`. Loopback with no `RANDOSTATS_PASSWORD`: no login.
+  `serve` beyond loopback without one exits 2; `_beyond_loopback` refuses a
+  connection on a non-loopback address when the app was started some other way.
+  With one: `PUBLIC_PATHS` and `/static/` need no session, everything else does
+  (pages 303 to `/login?next=`, the rest 401). `local_path` is all that stands
+  between `next=` and an open redirect; `tests/test_auth.py` lists the payloads.
+  The sign-in route is `async` so the guess count and the comparison run with no
+  await between them.
+- **Pages.** Every page with a script loads `/static/guard.js` first and has a
+  `<noscript>` note; its own script ends with `window.RandoGuard.started()`, or
+  the guard reports a failed start on every load. `404.html` has no script.
+  Page and site-file routes answer HEAD (`PAGE_METHODS`); FastAPI's docs routes
+  are off.
+- **`security.txt` expires** on the date in `static/security.txt`; the website
+  test fails once it has passed. Renew it a year out.
+- **No sub-path.** Every address the front end writes is root-absolute, so the
+  site runs at the root of its own origin only; the walk runs there.
+
 ## Verifying a change
 
-`ruff check .` lints; `pytest -q` covers parsers, stats, engine, API, security
-and timestamps. For anything visual, run the app and look at it:
+`ruff check .` lints; `pytest -q` covers parsers, stats, engine, API, security,
+timestamps and the website's headers and files. `pytest -q e2e` (after
+`pip install -e ".[e2e]"`; Chromium is preinstalled in the cloud sandbox, so
+`python -m playwright install` is only for elsewhere) drives both front ends
+and the sign-in page in Chromium under the policy and is part of CI's check
+job. For anything visual, run the app and look at it:
 
 ```bash
 randostats serve            # then load sample data on the Import tab

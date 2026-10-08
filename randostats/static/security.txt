@@ -1,0 +1,6 @@
+# randostats. Report privately, as SECURITY.md asks: the Contact is the repository's
+# private vulnerability report form, not its public issues. Renew Expires before it passes.
+Contact: https://github.com/Platteration/randostats/security/advisories/new
+Expires: 2027-10-08T00:00:00.000Z
+Policy: https://github.com/Platteration/randostats/blob/main/SECURITY.md
+Preferred-Languages: en

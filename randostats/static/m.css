@@ -38,6 +38,12 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
+/* guard.js puts this at the top of the page when a script did not load or threw
+   before the page started; <noscript> carries the same look. One red in both
+   schemes: white on #b42318 is 6.6:1, where the phone's dark --danger gives 3.2. */
+.guard-note { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: calc(10px + var(--safe-t)) 16px 10px; background: #b42318; color: #fff; font: 15px/1.45 var(--font); }
+.guard-note span { flex: 1 1 16em; }
+.guard-note button { font: inherit; padding: 6px 14px; border-radius: 10px; border: 0; background: #fff; color: #0b0b0b; }
 
 html, body { height: 100%; }
 body {

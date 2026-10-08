@@ -4,7 +4,8 @@ randostats is deliberately small: a FastAPI/SQLite backend serves a no-build-ste
 
 ## Backend
 
-- `randostats/api.py` owns HTTP routes and request/response validation.
+- `randostats/api.py` owns HTTP routes and request/response validation, and is the website's host: it sets the one response-header policy on every response, serves the 404 page, `robots.txt` and `security.txt`, and refuses every path that is not part of the site.
+- `randostats/auth.py` is the password gate (`RANDOSTATS_PASSWORD`): sessions, the constant-time comparison, the guess limit, and `local_path` for the sign-in page's `next=`.
 - `randostats/store.py` owns SQLite persistence, settings, and import identity.
 - `randostats/stats.py` contains pure-ish statistical transforms over stored messages.
 - `randostats/parsers/` turns exports into the shared message model. Timestamp meaning is centralized in the timestamp parser helpers.
@@ -32,13 +33,17 @@ The next safe extraction target is code in `app.js` that is both widely reused a
 
 Imported data is untrusted. Prefer `textContent` and DOM construction. If HTML strings are unavoidable, escape every imported value before it reaches `innerHTML`.
 
+## Site pages
+
+`guard.js` is the safety net every scripted page loads first; each page's own script ends with `window.RandoGuard.started()`. `login.html`/`login.js` is the sign-in page (only served when a password is set) and `404.html` the not-found page, which has no script. None of them depends on the desktop or phone modules.
+
 ## Phone frontend
 
 `m.html`, `m.css`, `m.js`, and `m-sw.js` form the installable `/m` Counterpoint PWA. It intentionally has a separate interaction model from the analytics UI. Do not make the desktop application a dependency of the phone shell.
 
 ## Tests and CI
 
-`pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, and regression cases. CI also asks Node to parse every JavaScript entry point. `tests/test_static_shell.py` guards the no-build-step asset graph and the module boundary so an HTML reference or shared-core dependency cannot silently regress.
+`pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, the website's headers and files, the password gate, and regression cases. CI also asks Node to parse every JavaScript entry point, and runs `pytest -q e2e`, which drives both front ends and the sign-in page in Chromium under the policy the server sends. `tests/test_static_shell.py` guards the no-build-step asset graph and the module boundary so an HTML reference or shared-core dependency cannot silently regress.
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`. The workflow builds both Python distributions, smoke-tests the wheel in a fresh virtual environment, and uploads the artifacts. It intentionally stops short of publishing them.
 

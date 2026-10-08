@@ -21,6 +21,11 @@
 
   async function api(path, opts) {
     const r = await fetch(path, opts);
+    if (r.status === 401) {
+      // A password is set and this session has ended: sign in, then come back.
+      location.assign(`/login?next=${encodeURIComponent(location.pathname)}`);
+      throw new Error("sign in first");
+    }
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     return r.json();
   }
@@ -477,4 +482,6 @@
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js", { scope: "/m" }).catch(() => { /* offline is a bonus, not a requirement */ });
   }
+  // Everything above is wired: the safety net (guard.js) can stand down.
+  if (window.RandoGuard) window.RandoGuard.started();
 })();

@@ -9,7 +9,9 @@ same magnitude that has nothing to do with it.
 > logic, drinking beer is caused by the ocean. Source: USGS, 2019."
 
 Everything runs locally. Your messages go into a SQLite file on your machine
-and never leave it.
+and never leave it. It is a website as well as a local app: `randostats serve`
+is the whole host, setting its own security headers, and served beyond your own
+machine it asks for a password on every request (see [Deploy](#deploy)).
 
 Two things do leave, both opt-in and both named where they happen: the
 Counterpoint tab's **Listen** button uses your browser's speech recognition,
@@ -116,9 +118,12 @@ offline; the answers still come from the app on your machine.
 
 A phone is another machine, and the server answers only to loopback names
 until told otherwise, so open `/m` from a phone by serving under a name the
-phone can reach, for example `randostats serve --host 0.0.0.0 --allow-host
-laptop.local`. Read what that costs under [Running it](#running-it) first: the
-name you add is one the server trusts with every message you imported.
+phone can reach, with a password, for example `RANDOSTATS_PASSWORD='…'
+randostats serve --host 0.0.0.0 --allow-host laptop.local`; the phone signs in
+once. Read what that costs under [Running it](#running-it) and
+[Deploy](#deploy) first: the name you add is one the server trusts with every
+message you imported, and over plain HTTP the password crosses the network
+readable.
 
 Type or paste the statistic, or use your keyboard's dictation key. **Hands-free
 listening is deliberately not offered up front.** On iOS the Speech Recognition
@@ -206,13 +211,14 @@ is that every memoised view is keyed on a value this app chose rather than on
 whatever arrived — one of the five conversation gaps in the menu, a row count
 clamped to 200, a name the store actually holds — so the cheap trick of
 varying a parameter to make the machine walk your whole history again has
-nothing left to vary but the row count. There is no login, so whatever reaches
-the port can read every message you imported, and a page on the internet can
-point a name it owns at 127.0.0.1 and try. To reach it under another name,
-say which:
+nothing left to vary but the row count. On loopback there is no login, so
+whatever reaches the port can read every message you imported, and a page on
+the internet can point a name it owns at 127.0.0.1 and try. Bound to anything
+wider, it does not start without a password (see [Deploy](#deploy)). To reach
+it under another name, say which, and set one:
 
 ```bash
-randostats serve --host 0.0.0.0 --allow-host laptop.lan
+RANDOSTATS_PASSWORD='at least twelve characters' randostats serve --host 0.0.0.0 --allow-host laptop.lan
 ```
 
 Those are not two independent guards. "Another site" is measured against the
@@ -249,15 +255,170 @@ half-empty chart as a fact about your friends.
 The database lives at `data/randostats.db` by default; override with `--db` or
 `RANDOSTATS_DB`.
 
+### Deploy
+
+randostats is a website served by its own server. The browser is the GUI; the
+server parses, stores and counts, and it is also the host: it sets every
+response header itself, answers a wrong address with a page of its own, and
+refuses every file that is not part of the site. There is no `_headers`,
+`.htaccess` or web-server configuration to keep in step with it.
+
+**Beyond this machine, a password.** Bound to loopback (the default), nothing
+asks for one. Bound to anything else (`--host 0.0.0.0`, a LAN address, a name),
+`randostats serve` will not start unless `RANDOSTATS_PASSWORD` is set in its
+environment, at least 12 characters: an environment variable, so it is in
+neither your shell history nor `ps`. Set it as well whenever something else on
+this machine publishes the port (a reverse proxy, a tunnel, a container's port
+mapping), since the server sees those connections arrive on loopback. With a
+password set, every page sends you to `/login` first, and the session then lasts
+30 days in an HttpOnly, SameSite=Lax cookie, Secure over HTTPS. **Sign out** in
+the header ends that session wherever a copy of the cookie went; restarting the
+server ends them all, and is the way to change the password. The password is
+compared as two fixed-length HMAC digests in constant time. After eight wrong
+guesses in a minute a client waits the minute out; the client is the address
+that connected, or behind a reverse proxy on this machine the address the proxy
+writes in `X-Forwarded-For` (uvicorn believes that header only from 127.0.0.1 and
+::1, or the addresses in `FORWARDED_ALLOW_IPS`), so set it there rather than let
+the client's own value through. What is the same for every visitor (`/static/`,
+the manifest, the service worker, `robots.txt`, `security.txt`) is served
+without a session; the two pages, the sample and the API are not. Run with
+`uvicorn --factory randostats.api:create_app` instead, the app reads
+`RANDOSTATS_PASSWORD` itself, and without one refuses every connection that
+arrives on an address other than loopback.
+
+**HTTPS in front.** Over plain HTTP beyond loopback the password and the session
+cookie cross the network readable. Put a TLS terminator in front, keep
+randostats on 127.0.0.1 behind it, pass the original `Host` through (and name it
+with `--allow-host`), and let the response headers through untouched rather
+than add a policy of its own. With nginx, for example:
+
+```nginx
+server {
+    listen 80;
+    server_name stats.example.com;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name stats.example.com;
+    ssl_certificate     /etc/letsencrypt/live/stats.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/stats.example.com/privkey.pem;
+    server_tokens off;
+    client_max_body_size 257m;  # RANDOSTATS_MAX_UPLOAD_MB (256) and the form around it
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+```
+
+```bash
+RANDOSTATS_PASSWORD='…' randostats serve --allow-host stats.example.com
+```
+
+**One origin of its own.** Serve it at the root of a name of its own
+(`stats.example.com`), not under a path of a site that hosts other things.
+Every address the front end writes is root-absolute, so it does not run under a
+sub-path; and the origin is what a browser isolates. Cookies, storage and
+service workers are per origin, and a page from another app on the same origin
+is same-origin with this one, so the cross-site checks cannot tell its requests
+from yours.
+
+**Response headers.** Every response (pages, files, JSON, refusals, 404s and
+500s) carries these, set in `randostats/api.py` and nowhere else.
+`tests/test_website.py` holds this block equal to the code, and the browser walk
+(`e2e/`) holds every response it sees to it:
+
+```http
+Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Permissions-Policy: accelerometer=(), attribution-reporting=(), autoplay=(), browsing-topics=(), camera=(), clipboard-read=(), clipboard-write=(self), compute-pressure=(), display-capture=(), encrypted-media=(), fullscreen=(), gamepad=(), geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), idle-detection=(), interest-cohort=(), join-ad-interest-group=(), local-fonts=(), magnetometer=(), microphone=(self), midi=(), otp-credentials=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), run-ad-auction=(), screen-wake-lock=(), serial=(), storage-access=(), usb=(), window-management=(), xr-spatial-tracking=()
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+```
+
+Over HTTPS, meaning the request's own scheme or `X-Forwarded-Proto: https` from a
+proxy uvicorn believes, the policy also ends `; upgrade-insecure-requests` and
+`Strict-Transport-Security: max-age=31536000; includeSubDomains` is added. Over plain HTTP the first would
+send every script and stylesheet to an `https://` that is not listening (measured
+from a LAN address: the sign-in page loaded with no stylesheet and no script), and
+the second is ignored.
+
+| Directive | Why |
+| --- | --- |
+| `default-src 'none'` | Anything not named below is refused: fonts, frames, media, plugins and every other origin. |
+| `script-src 'self'`, `style-src 'self'` | The app's own files only. Nothing inline: the charts used to write `style=""` attributes and now set the same declarations through the CSSOM or a class. |
+| `img-src 'self' blob:` | The icons `/m` links, and the two share images (the Wrapped PNG and the phone's card), drawn through `blob:` URLs. No `data:`. |
+| `connect-src 'self'` | The API. Nothing else is fetched. |
+| `manifest-src 'self'`, `worker-src 'self'` | `/m`'s manifest and its service worker. The worker would run under `script-src 'self'` without the second (CSP falls back to it); it is stated so that a change to `script-src` cannot change what may run as a worker. |
+| `base-uri 'none'`, `object-src 'none'`, `form-action 'none'` | No `<base>`, no plugins, and no native form submission: the import form and the sign-in form are submitted by script. |
+| `frame-ancestors 'none'`, `X-Frame-Options: DENY` | Nothing may frame it (clickjacking); the second for browsers before CSP 2. |
+| `Referrer-Policy: no-referrer` | A URL here can carry a contact's name or the sign-in page's `next=`. |
+| `Permissions-Policy` | Every feature off but the microphone (Listen, and the phone's hands-free probe) and clipboard-write (the phone's Copy). The walk reads it back from Chromium. |
+| `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy` | `same-origin`: no other window keeps a handle on this one, and no other site embeds its responses. |
+
+Measured and not adopted: `require-trusted-types-for 'script'`. Every chart,
+table and card is built as escaped markup assigned to `innerHTML` (the escaping
+lint in `tests/test_security.py` holds each one), which Trusted Types refuses as
+a string, so the first render fails under it. Adopting it means a policy at each
+of those sinks, where a pass-through one would add nothing, or building them all
+with DOM calls.
+
+**Caching.** `Cache-Control: no-store` on every `/api/` answer, since each is one
+person's messages and changes with every import; `no-cache` on everything else,
+since no file name carries a version: an unchanged file costs a 304.
+
+**A safety net.** `static/guard.js` loads first on every page that has a script.
+When one of the page's scripts does not load, or throws before the page has
+started, it puts a note with a Reload button at the top of the page instead of
+leaving controls that do nothing; an error after the start gets a note that can
+be dismissed. With JavaScript off, each page's `<noscript>` note says so.
+
+**Not the site.** Only `/`, `/m`, `/login`, `/static/`, `/sw.js`,
+`/manifest.webmanifest`, `/samples/sample_messages.json`, `/robots.txt`,
+`/.well-known/security.txt` and the API answer. FastAPI's `/docs`, `/redoc` and
+`/openapi.json` are off, nothing else under `samples/` is served, and any other
+address is a 404, which in the browser is a page in the app's look with no
+script. `robots.txt` asks every crawler to stay out; `security.txt` points to
+the private report form [`SECURITY.md`](SECURITY.md) names, and its `Expires`
+(2027-10-08) has to be renewed before then: `tests/test_website.py` fails once it
+has passed.
+
+**Launch checklist**, with `SITE` your HTTPS name:
+
+```sh
+curl -sI http://SITE/ | head -1                  # a 301 to https (the proxy)
+curl -sI https://SITE/robots.txt | grep -i -E 'content-security|strict-transport|nosniff|referrer|permissions|cache-control'
+curl -sI https://SITE/ | head -1                 # a 303 to /login
+curl -s  https://SITE/api/status                 # {"detail":"sign in first"}
+curl -sI https://SITE/.git/config | head -1      # a 404
+```
+
+Then sign in, load the sample, open every tab and the phone page, and check
+that the browser console shows no `Content Security Policy` line.
+
 ## Development
 
 ```bash
 ruff check .                         # pyflakes and the pycodestyle errors
-pytest -q                            # parsers, stats, counterpoint, API, security, timestamps
+pytest -q                            # parsers, stats, counterpoint, API, security, timestamps, the website
+pip install -e ".[e2e]"              # Playwright, for the browser walk
+python -m playwright install chromium
+pytest -q e2e                        # both front ends driven in Chromium under the policy the server sends
 ```
 
-CI runs both on Python 3.10 and 3.12, with and without the `llm` extra,
-then installs the built package and runs it from outside the checkout, which
+The browser walk starts `randostats serve` itself and fails on any Content
+Security Policy violation, page error, console error, failed request, request to
+another origin, or response whose headers are not the policy; it also stops the
+server to open the phone app from its offline cache, and checks the safety net,
+the 404 page, the files that must not be served and the sign-in flow.
+
+CI runs both on Python 3.10 and 3.12, with and without the `llm` extra, and
+the browser walk after them, then installs the built package and runs it from outside the checkout, which
 is the only way to tell that the data files ship. A separate job runs
 `pip-audit`, pinned with its dependencies by hash, over the declared
 dependencies and the `llm` extra twice: at the newest versions the ranges in
@@ -282,9 +443,12 @@ randostats/
   stats.py        overview, frequency, timing, reply latency, conversation health, words,
                   misspellings, emoji, tone, search, wrapped
   store.py        SQLite persistence (idempotent imports, settings)
+  auth.py         the password gate: RANDOSTATS_PASSWORD, sessions, the guess limit
   counterpoint/   facts.json, myths.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
-  api.py          FastAPI routes
+  api.py          FastAPI routes, and the host: the response headers, the 404 page, sign-in
   static/         desktop shell, shared frontend core, overview, hand-drawn SVG charts,
-                  drill-down drawer, Wrapped card, Web Speech API listening, phone PWA
+                  drill-down drawer, Wrapped card, Web Speech API listening, phone PWA,
+                  the safety net (guard.js), sign-in and 404 pages, robots.txt, security.txt
 samples/          make_sample.py generates fake exports
+e2e/              the browser walk (Playwright): the site under its own policy
 ```

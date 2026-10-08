@@ -4,10 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>randostats</title>
+<script src="/static/guard.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/spruce.css">
 </head>
 <body>
+<noscript><div class="guard-note">randostats needs JavaScript, and it is off for this site. Turn it on and reload: the charts, the import and Counterpoint are all drawn by script.</div></noscript>
 <a href="#main" class="skip">Skip to content</a>
 <header class="top">
   <div class="brand"><span class="logo">%</span> randostats</div>
@@ -22,7 +24,10 @@
     <button data-tab="counter">Counterpoint</button>
     <button data-tab="import">Import</button>
   </nav>
-  <div class="status" id="status">loading…</div>
+  <div class="top-end">
+    <div class="status" id="status">loading…</div>
+    <button class="link" type="button" id="sign-out" hidden>Sign out</button>
+  </div>
 </header>
 
 <div id="live" class="sr-only" role="status" aria-live="polite"></div>

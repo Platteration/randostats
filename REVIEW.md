@@ -22,6 +22,8 @@ Repository hardening applied here as well: every GitHub Action is pinned to a co
 
 `SUP-1`, in part (2026-09-23): the `audit` job audits the declared dependencies at their floors as well as at the newest versions they resolve to, and the floors of python-multipart, starlette and pydantic were raised clear of the advisories that audit found (the improvement "Add a lockfile and raise dependency floors"). There is still no lockfile.
 
+Website layer (2026-10-08): the app is served as a website by its own server. Every response carries one measured policy (`default-src 'none'`, no inline script or style, `frame-ancestors 'none'`, and the other headers README.md lists under "Deploy"), and `SEC-4` is closed further: bound beyond loopback, `randostats serve` will not start without `RANDOSTATS_PASSWORD`, which every request then has to have signed in with. `pytest -q e2e` drives both front ends in Chromium under the policy in CI.
+
 The rest of this document is the review as written. Fixed items are left in place so the reasoning behind each change stays with it.
 
 ## Summary

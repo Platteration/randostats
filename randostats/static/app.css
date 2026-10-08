@@ -47,7 +47,7 @@ h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
 .filters { display: flex; gap: 16px; align-items: center; margin: 4px 0 16px; flex-wrap: wrap; }
 label { color: var(--ink-2); font-size: 13px; display: inline-flex; gap: 8px; align-items: center; }
-select, input[type=text], input:not([type]), textarea { font: inherit; color: var(--ink); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; }
+select, input[type=text], input[type=password], input:not([type]), textarea { font: inherit; color: var(--ink); background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; }
 textarea { width: 100%; resize: vertical; }
 button { font: inherit; cursor: pointer; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--axis); background: var(--surface-1); color: var(--ink); }
 button.primary { background: var(--ink); color: var(--surface-1); border-color: var(--ink); }
@@ -62,6 +62,9 @@ button.listening { background: var(--danger); color: #fff; border-color: var(--d
 .legend { display: flex; gap: 16px; color: var(--ink-2); font-size: 12px; margin-bottom: 6px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .sw.s1 { background: var(--s1); } .sw.s2 { background: var(--s2); }
+.sw.hue0 { background: var(--muted); }
+.sw.hue1 { background: var(--c1); } .sw.hue2 { background: var(--c2); } .sw.hue3 { background: var(--c3); } .sw.hue4 { background: var(--c4); }
+.sw.hue5 { background: var(--c5); } .sw.hue6 { background: var(--c6); } .sw.hue7 { background: var(--c7); } .sw.hue8 { background: var(--c8); }
 .chart { overflow-x: auto; }
 .chart svg { display: block; max-width: 100%; height: auto; font: 12px var(--font); }
 .chart .grid line { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
@@ -89,6 +92,7 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .cp .claim b { color: var(--ink); text-transform: none; letter-spacing: 0; font-size: 13px; }
 .cp .punch { font-size: 16px; margin: 6px 0; }
 .cp .fact { color: var(--ink-2); }
+.cp .fact.also { margin-top: 6px; }
 .cp .src { color: var(--muted); font-size: 12px; }
 .cp .gap { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--grid); color: var(--ink-2); font-size: 13px; }
 .cp .gap b { color: var(--ink); }
@@ -137,6 +141,29 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .msg mark { background: var(--seq-200); color: var(--ink); border-radius: 3px; padding: 0 2px; }
 .msg.sent mark { background: rgba(255,255,255,.35); color: #fff; }
 .clickable { cursor: pointer; }
+
+/* ---------- the website: safety net, sign-in, not found ---------- */
+/* guard.js puts this at the top of the page when a script did not load or threw
+   before the page started; <noscript> carries the same look. One red in both
+   schemes: white on #b42318 is 6.6:1, where the phone's dark --danger gives 3.2. */
+.guard-note { position: sticky; top: 0; z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 24px; background: #b42318; color: #fff; font: 14px/1.45 var(--font); }
+.guard-note span { flex: 1 1 24em; }
+.guard-note button { background: #fff; color: #0b0b0b; border-color: #fff; }
+/* Sign out sits under the status line, no wider than it: the header's row is full at
+   1280px, and a button beside the status put it on a second row. */
+.top-end { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.top-end .status { margin-left: 0; }
+button.link { border: 0; background: none; padding: 0; border-radius: 4px; color: var(--ink-2); font-size: 12px; text-decoration: underline; }
+/* The sign-in and not-found pages: one card in the middle, and room above it for
+   the note, which has to stay at the top and full width. */
+.page-card { display: flex; flex-direction: column; min-height: 100vh; }
+.site-card { box-sizing: border-box; width: calc(100% - 32px); max-width: 30rem; margin: auto; padding: 28px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); }
+.site-card h1 { font-size: 22px; margin: 18px 0 6px; }
+.sign-in-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 16px 0 4px; }
+.sign-in-form label { flex: 1 1 14rem; flex-direction: column; align-items: stretch; gap: 4px; }
+.site-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+a.button { display: inline-block; text-decoration: none; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--axis); background: var(--surface-1); color: var(--ink); }
+a.button.primary { background: var(--ink); color: var(--surface-1); border-color: var(--ink); }
 
 /* ---------- motion (opt-out honoured) ---------- */
 @media (prefers-reduced-motion: no-preference) {

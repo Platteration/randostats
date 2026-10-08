@@ -42,7 +42,7 @@ class _InlineHandlers(HTMLParser):
                 self.found.append(f"line {self.getpos()[0]}: <{tag} {name}=...>")
 
 
-@pytest.mark.parametrize("page", ["index.html", "m.html"])
+@pytest.mark.parametrize("page", ["index.html", "m.html", "login.html", "404.html"])
 def test_no_inline_event_handlers(page):
     """The CSP is script-src 'self' (test_security_headers_are_sent), so the browser
     refuses an onclick= attribute and the control silently does nothing. The Import
@@ -80,3 +80,16 @@ def test_repo_polish_docs_and_release_workflow_exist():
     assert "python -m build" in text
     assert "pip install dist/*.whl" in text
     assert re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v4", text)
+
+def test_every_script_is_parsed_in_ci_and_walked_by_the_escaping_lint():
+    """There is no build step, so `node --check` in CI is the only thing that parses a
+    script before a browser does, and the escaping lint in test_security.py reads
+    only the files it lists. A new static module goes in both, or neither sees it."""
+    import test_security
+
+    scripts = {path.name for path in STATIC.glob("*.js")}
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    checked = set(re.findall(r"node --check randostats/static/([\w.-]+\.js)", ci))
+    assert scripts == checked, scripts ^ checked
+    linted = {path.name for path in test_security.FRONT_ENDS}
+    assert scripts - {"m-sw.js"} == linted, (scripts - {"m-sw.js"}) ^ linted

@@ -9,6 +9,11 @@
 
   const api = async (path, opts) => {
     const response = await fetch(path, opts);
+    if (response.status === 401) {
+      // A password is set and this session has ended: sign in, then come back.
+      location.assign(`/login?next=${encodeURIComponent(location.pathname + location.hash)}`);
+      throw new Error("sign in first");
+    }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.detail || response.statusText || `HTTP ${response.status}`);

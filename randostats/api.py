@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import threading
 import uuid
@@ -9,26 +10,88 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import parsers, stats
+from . import auth, parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
 
 STATIC = Path(__file__).with_name("static")
 
-# Imported files are other people's data, and a contact name can hold markup.
-# The front end escapes everything it renders; this header is the second line,
-# so an injected tag cannot run script even if an escape is ever missed.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
-       "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+# -- the website: what every response carries -----------------------------------
+# This server is the host: there is no static file server or CDN in front of it to
+# set headers, so the policy is written here, once, and the middleware below puts
+# it on every response - pages, scripts, JSON, refusals, 404s and 500s alike.
+# README.md ("Deploy") prints the same values and tests/test_website.py holds the
+# two equal; the browser walk in e2e/ drives both front ends under it and fails on
+# any violation, so a source this list lacks shows up there and not on a device.
+#
+# Imported files are other people's data, and a contact name can hold markup. The
+# front end escapes everything it renders; this header is the second line, so an
+# injected tag cannot run script even if an escape is ever missed. Each source was
+# measured in Chromium with the policy as a response header: script-src and
+# style-src 'self' and nothing inline (the charts once wrote style="" attributes;
+# they go through the CSSOM or a class now), img-src 'self' for the icons /m links
+# and blob: for the two share images (the Wrapped PNG and the phone's card),
+# connect-src 'self' for the API, and manifest-src 'self' for /m's manifest: take
+# any of them out and the walk fails. worker-src 'self' names /m's service worker;
+# without it the worker would fall back to script-src 'self' and run all the same,
+# so it is stated to keep a later change to script-src from changing what may run
+# as a worker. No font, frame, media or other origin is loaded, so default-src
+# 'none' refuses them; no form posts natively (each is submitted by script), so
+# form-action is 'none'.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
+       "connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; "
+       "form-action 'none'; object-src 'none'; frame-ancestors 'none'")
+# Only over HTTPS. Every address the app loads is on its own origin, so there is
+# nothing to upgrade there; over plain HTTP from a LAN address it would send every
+# script, stylesheet and API call to an https:// that is not listening.
+CSP_HTTPS = CSP + "; upgrade-insecure-requests"
+HSTS = "max-age=31536000; includeSubDomains"
+# Every feature denied but the two the app uses: the microphone (the Counterpoint
+# tab's Listen button and the phone's hands-free probe run the Web Speech API,
+# which listens through it) and clipboard-write (the phone's Copy). Each name is
+# one Chromium 141 recognises, and the walk reads the policy back from it.
+PERMISSIONS = ("accelerometer=(), attribution-reporting=(), autoplay=(), browsing-topics=(), "
+               "camera=(), clipboard-read=(), clipboard-write=(self), compute-pressure=(), "
+               "display-capture=(), encrypted-media=(), fullscreen=(), gamepad=(), "
+               "geolocation=(), gyroscope=(), hid=(), identity-credentials-get=(), "
+               "idle-detection=(), interest-cohort=(), join-ad-interest-group=(), local-fonts=(), "
+               "magnetometer=(), microphone=(self), midi=(), otp-credentials=(), payment=(), "
+               "picture-in-picture=(), publickey-credentials-create=(), "
+               "publickey-credentials-get=(), run-ad-auction=(), screen-wake-lock=(), serial=(), "
+               "storage-access=(), usb=(), window-management=(), xr-spatial-tracking=()")
+HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    # frame-ancestors 'none' says the same to every browser that reads CSP 2.
+    "X-Frame-Options": "DENY",
+    # A URL here can carry a contact's name (/api/messages?contact=...) and the
+    # sign-in page's next=, so none is sent anywhere.
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": PERMISSIONS,
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+# Paths a visitor reaches without a session when a password is set: the sign-in
+# page and its two endpoints, and files that are the same for every visitor and
+# carry none of anyone's data. Everything else - the two pages, the sample, every
+# other /api/ route, and any path at all that is not here - needs one.
+PUBLIC_PATHS = frozenset({"/login", "/api/login", "/api/logout", "/sw.js", "/manifest.webmanifest",
+                          "/robots.txt", "/.well-known/security.txt"})
+PUBLIC_PREFIX = "/static/"
+NOT_FOUND_PAGE = (STATIC / "404.html").read_text(encoding="utf-8")
+# A page or a site file answers HEAD as well as GET, as a web server's files do: link
+# checkers and uptime monitors ask with it. FastAPI's @app.get registers GET alone.
+PAGE_METHODS = ["GET", "HEAD"]
 
 MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024 * 1024
 
@@ -42,11 +105,12 @@ MULTIPART_OVERHEAD = 8 * 1024
 # answered twice. Ids come from us, and old ones fall off the end.
 MAX_SESSIONS = 256
 
-# Nothing here asks for a password: whatever reaches the port can read every
-# message and delete the lot. A page on the internet can point a name it owns
-# at 127.0.0.1 (DNS rebinding) and then talk to this server *same-origin*, so
-# CORS never comes into it. Two checks stop that: the Host header has to be a
-# name we agreed to serve, and a mutating request has to come from us.
+# Bound to loopback with no password, nothing here asks for one: whatever reaches
+# the port can read every message and delete the lot. A page on the internet can
+# point a name it owns at 127.0.0.1 (DNS rebinding) and then talk to this server
+# *same-origin*, so CORS never comes into it. Two checks stop that: the Host
+# header has to be a name we agreed to serve, and a mutating request has to come
+# from us. Anywhere else, RANDOSTATS_PASSWORD (auth.py) is the third.
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -135,6 +199,28 @@ def _hostname(value: str) -> str:
     return netloc.rpartition(":")[0] if netloc.count(":") == 1 else netloc
 
 
+def _beyond_loopback(request) -> bool:
+    """Whether this connection reached a socket on an address other than loopback.
+
+    uvicorn puts the connection's local address in scope["server"], so a server
+    bound to 0.0.0.0 still answers a browser on this machine (127.0.0.1) and can
+    tell it from one across the network. Anything that is not an address (a test
+    client's host name, a unix socket's path) says nothing either way.
+    """
+    server = request.scope.get("server")
+    try:
+        address = ipaddress.ip_address(str(server[0]).split("%", 1)[0])
+    except (TypeError, IndexError, ValueError):
+        return False
+    if address.version == 6 and address.ipv4_mapped:  # a dual-stack bind of "::"
+        address = address.ipv4_mapped
+    return not address.is_loopback
+
+
+def _wants_html(request) -> bool:
+    return "text/html" in request.headers.get("accept", "")
+
+
 class Derived:
     """Per-import memo for the aggregate views.
 
@@ -181,13 +267,28 @@ class CounterRequest(BaseModel):
     llm: bool = True
 
 
+class SignIn(BaseModel):
+    """The sign-in form: a password, and the page to go back to."""
+
+    password: str = Field(max_length=1024)
+    next: str | None = Field(None, max_length=2048)
+
+
 def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
-               allowed_hosts: Sequence[str] | None = None) -> FastAPI:
-    app = FastAPI(title="randostats", version="0.1.0")
+               allowed_hosts: Sequence[str] | None = None, password: str | None = None) -> FastAPI:
+    # No /docs, /redoc or /openapi.json: they are not part of the site (the Swagger
+    # page would load its script from a CDN the policy refuses), and the API is
+    # spelled out in this file and in static/app.js.
+    app = FastAPI(title="randostats", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
     # Host names this server answers to. "*" turns the check off for someone
     # who knows what they are doing (see `randostats serve --allow-host`).
     hosts = {_hostname(h) for h in (LOOPBACK_HOSTS if allowed_hosts is None else allowed_hosts)}
     any_host = "*" in hosts
+    # The password, from the CLI or, for `uvicorn --factory`, the environment. A
+    # password too short to stand on a network is refused here, at start-up.
+    if password is None:
+        password = os.environ.get("RANDOSTATS_PASSWORD") or None
+    gate = auth.Gate(password) if password is not None else None
 
     def refuse(request) -> JSONResponse | None:
         """Why this request must not be answered at all, if it must not."""
@@ -196,6 +297,13 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             # A name that resolves to this machine is not a name we serve.
             return JSONResponse({"detail": "invalid host header; pass --allow-host to serve this name"},
                                 status_code=400)
+        if gate is None and _beyond_loopback(request):
+            # `randostats serve` will not bind beyond loopback without a password,
+            # but `uvicorn --factory randostats.api:create_app --host 0.0.0.0` can,
+            # and then this is the only thing that knows. A browser on this machine
+            # still reaches it through 127.0.0.1; one across the network does not.
+            return JSONResponse({"detail": "this server is reachable from beyond this machine and has no "
+                                           "password; set RANDOSTATS_PASSWORD"}, status_code=403)
         # multipart/form-data needs no CORS preflight, so /api/import is
         # reachable from any page in the browser unless the browser's own
         # account of where the request came from is checked.
@@ -240,16 +348,43 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                                     status_code=413)
         return None
 
-    def decorate(response):
-        response.headers.setdefault("Content-Security-Policy", CSP)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("Referrer-Policy", "no-referrer")
+    def gatekeep(request) -> JSONResponse | RedirectResponse | None:
+        """With a password set, a request without a session goes no further."""
+        path = request.scope["path"]
+        if gate is None or path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIX):
+            return None
+        if gate.valid(request.cookies.get(auth.COOKIE)):
+            return None
+        if request.method in SAFE_METHODS and not path.startswith("/api/") and _wants_html(request):
+            # A page opened in the browser goes to the sign-in page and comes back.
+            query = request.scope.get("query_string", b"").decode("latin-1")
+            back = auth.local_path(path + (f"?{query}" if query else ""))
+            return RedirectResponse(f"/login?next={quote(back, safe='')}", status_code=303)
+        return JSONResponse({"detail": "sign in first"}, status_code=401)
+
+    def decorate(request, response):
+        """The one policy, on every response this app gives (see CSP above)."""
+        https = request.scope.get("scheme") == "https"
+        response.headers["Content-Security-Policy"] = CSP_HTTPS if https else CSP
+        for name, value in HEADERS.items():
+            response.headers[name] = value
+        if https:
+            # Sent on a plain-http answer it would be ignored, and it is a promise
+            # about the name, so only the TLS endpoint makes it.
+            response.headers["Strict-Transport-Security"] = HSTS
+        # An answer from the API is one person's messages and changes with every
+        # import, so nothing keeps a copy. Everything else is a file whose name
+        # carries no version: revalidated on every use, an unchanged one is a 304.
+        response.headers.setdefault("Cache-Control",
+                                    "no-store" if request.scope["path"].startswith("/api/") else "no-cache")
         return response
 
     @app.middleware("http")
     async def security_guard(request, call_next):
         refusal = refuse(request)
-        return decorate(refusal if refusal is not None else await call_next(request))
+        if refusal is None:
+            refusal = gatekeep(request)
+        return decorate(request, refusal if refusal is not None else await call_next(request))
 
     # Starlette builds its stack as [ServerErrorMiddleware] + user middleware +
     # [ExceptionMiddleware] + router, so the middleware above is *inside* the
@@ -260,7 +395,17 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     # is that it is already there when the first one gives way.
     @app.exception_handler(Exception)
     def unhandled(request, exc):
-        return decorate(JSONResponse({"detail": "internal server error"}, status_code=500))
+        return decorate(request, JSONResponse({"detail": "internal server error"}, status_code=500))
+
+    # A wrong address typed into the browser gets a page in the app's own look,
+    # with no script in it; the API, and anything that did not ask for HTML,
+    # keeps the JSON answer FastAPI gives.
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request, exc):
+        if exc.status_code == 404 and _wants_html(request) and not request.scope["path"].startswith("/api/"):
+            return HTMLResponse(NOT_FOUND_PAGE, status_code=404)
+        return await http_exception_handler(request, exc)
+
     store = Store(db_path)
 
     def build_engine() -> CounterpointEngine:
@@ -314,24 +459,39 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     # -- static ---------------------------------------------------------------
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
-    samples_dir = Path(__file__).resolve().parent.parent / "samples"
-    if samples_dir.is_dir():
-        app.mount("/samples", StaticFiles(directory=samples_dir), name="samples")
+    sample = Path(__file__).resolve().parent.parent / "samples" / "sample_messages.json"
 
-    @app.get("/", include_in_schema=False)
+    @app.api_route("/samples/sample_messages.json", methods=PAGE_METHODS, include_in_schema=False)
+    def sample_messages():
+        """The one file "Load sample data" fetches. The directory it sits in also
+        holds the scripts that write it, which are sources, not part of the site,
+        so the rest of it is not served."""
+        if not sample.is_file():  # an installed package carries no samples/
+            raise HTTPException(404, "the sample data is not part of this installation")
+        return FileResponse(sample, media_type="application/json")
+
+    @app.api_route("/robots.txt", methods=PAGE_METHODS, include_in_schema=False)
+    def robots():
+        return FileResponse(STATIC / "robots.txt", media_type="text/plain; charset=utf-8")
+
+    @app.api_route("/.well-known/security.txt", methods=PAGE_METHODS, include_in_schema=False)
+    def security_txt():
+        return FileResponse(STATIC / "security.txt", media_type="text/plain; charset=utf-8")
+
+    @app.api_route("/", methods=PAGE_METHODS, include_in_schema=False)
     def index():
         return FileResponse(STATIC / "index.html")
 
-    @app.get("/m", include_in_schema=False)
+    @app.api_route("/m", methods=PAGE_METHODS, include_in_schema=False)
     def mobile():
         """The phone app: the counterpoint half, without the archive."""
         return FileResponse(STATIC / "m.html")
 
-    @app.get("/manifest.webmanifest", include_in_schema=False)
+    @app.api_route("/manifest.webmanifest", methods=PAGE_METHODS, include_in_schema=False)
     def manifest():
         return FileResponse(STATIC / "m.webmanifest", media_type="application/manifest+json")
 
-    @app.get("/sw.js", include_in_schema=False)
+    @app.api_route("/sw.js", methods=PAGE_METHODS, include_in_schema=False)
     def service_worker():
         """Served from the root deliberately: a worker's scope defaults to its
         own directory, so one under /static could never control /m."""
@@ -347,7 +507,41 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             "self_name": store.get_setting("self_name", ""),
             "formats": sorted(parsers.PARSERS),
             "llm": llm_on,
+            # Whether a password is set, so the page knows to offer Sign out.
+            "auth": gate is not None,
         }
+
+    # -- signing in (only with RANDOSTATS_PASSWORD) -----------------------------
+    if gate is not None:
+        @app.api_route("/login", methods=PAGE_METHODS, include_in_schema=False)
+        def sign_in_page():
+            return FileResponse(STATIC / "login.html")
+
+        @app.post("/api/login")
+        async def sign_in(form: SignIn, request: Request):
+            # async, so the count, the comparison and the reset run on the event
+            # loop with nothing between them for a parallel guess to slip into.
+            client = request.client.host if request.client else ""
+            wait = gate.admit(client)
+            if wait:
+                return JSONResponse({"detail": f"Too many attempts. Try again in {wait} seconds."},
+                                    status_code=429, headers={"Retry-After": str(wait)})
+            if not gate.password_matches(form.password):
+                return JSONResponse({"detail": "That is not the password."}, status_code=401)
+            gate.forget(client)
+            response = JSONResponse({"next": auth.local_path(form.next)})
+            response.set_cookie(auth.COOKIE, gate.issue(), max_age=auth.SESSION_DAYS * 86400, path="/",
+                                httponly=True, samesite="lax", secure=request.scope.get("scheme") == "https")
+            return response
+
+        @app.post("/api/logout")
+        def sign_out(request: Request):
+            # Ends the session itself, so a copy of the cookie elsewhere is dead too.
+            gate.revoke(request.cookies.get(auth.COOKIE))
+            response = JSONResponse({"ok": True})
+            response.delete_cookie(auth.COOKIE, path="/", httponly=True, samesite="lax",
+                                   secure=request.scope.get("scheme") == "https")
+            return response
 
     @app.post("/api/import")
     async def import_file(file: UploadFile = File(...), self_name: str = Form(...), fmt: str = Form("auto"),
@@ -595,3 +789,6 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 # dictionary. For ``uvicorn`` directly, use the factory:
 #
 #     uvicorn --factory randostats.api:create_app
+#
+# It reads RANDOSTATS_PASSWORD itself. Without one it still answers 127.0.0.1, and
+# refuses any connection that reached it on another address (`_beyond_loopback`).

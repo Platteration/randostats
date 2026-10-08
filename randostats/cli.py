@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import os
 import sys
 from pathlib import Path
 
 from . import parsers
+from .auth import password_problem
 from .store import DEFAULT_DB, Store
+
+
+def _loopback(host: str) -> bool:
+    """Whether binding ``host`` keeps the server on this machine.
+
+    "localhost" and the loopback addresses (all of 127.0.0.0/8, and ::1) do. ""
+    "0.0.0.0" and "::" are every interface, and any other name is whatever it
+    resolves to, which is not something to take on trust.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,9 +35,9 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("serve", help="run the web app")
     s.add_argument("--host", default="127.0.0.1",
-                   help="interface to bind (default: %(default)s). There is no login: bind anything wider "
-                        "and every message you have imported is readable, and deletable, by whoever "
-                        "reaches the port.")
+                   help="interface to bind (default: %(default)s). Anything but loopback needs "
+                        "RANDOSTATS_PASSWORD (at least 12 characters) set in the environment: whoever "
+                        "reaches the port and has it can read, and delete, every message you have imported.")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
@@ -52,23 +70,41 @@ def main(argv: list[str] | None = None) -> int:
         hosts = [*LOOPBACK_HOSTS, *args.allow_host]
         if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
             hosts.append(args.host)
+        # The password comes from the environment, not an argument, so that it
+        # is not in the shell history or in every `ps` listing on the machine.
+        password = os.environ.get("RANDOSTATS_PASSWORD") or None
+        problem = password and password_problem(password)
+        if problem:
+            print(f"error: {problem}.", file=sys.stderr)
+            return 2
         # "" is a bind-all, exactly as the line above says: uvicorn hands it
         # straight to bind(), and bind(("", port)) is every interface. Filing
         # it with the loopback names here let the widest bind of the three be
         # the one that said nothing.
-        if args.host not in LOOPBACK_HOSTS:
-            # There is no password on any of this. Say so before it is served.
+        if not _loopback(args.host):
+            if password is None:
+                # Everything imported, readable and deletable by whoever reaches the
+                # port: not something to start by accident, or with a warning.
+                print(f"error: serving on {args.host or '0.0.0.0'} reaches beyond this machine, and nothing\n"
+                      "       would ask for a password: anyone who can reach the port could read, search and\n"
+                      "       export every message you have imported, and delete the lot. Set\n"
+                      "       RANDOSTATS_PASSWORD (at least 12 characters) in the environment, or bind\n"
+                      "       127.0.0.1 (the default).", file=sys.stderr)
+                return 2
+            # Say what that still costs before it is served.
             print(f"warning: serving on {args.host or '0.0.0.0'}, which is not just this machine.\n"
-                  "         Nothing here asks for a password: anyone who can reach this port can read,\n"
-                  "         search and export every message you have imported, and delete the lot.\n"
-                  "         Bind 127.0.0.1 (the default) unless you mean it.", file=sys.stderr)
+                  "         Anyone who can reach this port and has the password can read, search and\n"
+                  "         export every message you have imported, and delete the lot. Over plain HTTP\n"
+                  "         the password and the session cookie cross the network readable: put HTTPS\n"
+                  "         in front (README, \"Deploy\").", file=sys.stderr)
             if args.llm:
                 # The warning above is about the data. --llm also hands out a
                 # credential that costs money, which is a separate decision.
                 print("         With --llm, they can also make this server call the Anthropic API on your\n"
                       "         credential. RANDOSTATS_LLM_CALLS_PER_HOUR caps how much of that it will do.",
                       file=sys.stderr)
-        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
+        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts, password=password),
+                    host=args.host, port=args.port)
         return 0
 
     if args.cmd == "import":
