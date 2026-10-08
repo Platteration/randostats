@@ -393,12 +393,17 @@
      hidden until a probe actually returns a transcript, and the verdict sticks. */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const SPEECH_KEY = "counterpoint.speech";
+  /* A browser told to keep no site data throws on any localStorage access. The
+     verdict then lasts for this visit only: the page must not stop here, before
+     it tells the safety net (guard.js) it started, over controls that work. */
+  let verdictThisVisit = null;
 
   /* The mic never appears on the compose bar until a probe has actually
      returned a transcript. Until then the only mention of it is one line
      inside the settings sheet, well off the thumb path. */
   function offerSpeech() {
-    const verdict = localStorage.getItem(SPEECH_KEY);
+    let verdict = verdictThisVisit;
+    try { verdict = localStorage.getItem(SPEECH_KEY) || verdict; } catch { /* storage refused */ }
     if (verdict === "yes") { $("#mic").hidden = false; $("#speech-offer").hidden = true; return; }
     $("#mic").hidden = true;
     $("#speech-offer").hidden = !SR || verdict === "no";
@@ -417,7 +422,8 @@
 
     rec.onresult = (e) => {
       heard = true;
-      localStorage.setItem(SPEECH_KEY, "yes");
+      verdictThisVisit = "yes";
+      try { localStorage.setItem(SPEECH_KEY, "yes"); } catch { /* this visit only */ }
       offerSpeech();
       if (probing) { closeSheet(); hint("Hands-free works here. The mic is next to the box."); }
       // Fills the box; never submits. One rule: text goes in, the button fires it.
@@ -436,7 +442,8 @@
   /* The installed-iOS-PWA signature: start() resolves, end fires at once, no
      result, no error. Nothing to feature-detect, so record the verdict. */
   function failSpeech() {
-    localStorage.setItem(SPEECH_KEY, "no");
+    verdictThisVisit = "no";
+    try { localStorage.setItem(SPEECH_KEY, "no"); } catch { /* this visit only */ }
     $("#mic").hidden = true;
     $("#speech-offer").hidden = true;
     hint("Hands-free doesn't work here, whatever the browser claims. Use the dictation key on your keyboard instead — it's better anyway.");

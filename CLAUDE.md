@@ -122,7 +122,10 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   await between them.
 - **Pages.** Every page with a script loads `/static/guard.js` first and has a
   `<noscript>` note; its own script ends with `window.RandoGuard.started()`, or
-  the guard reports a failed start on every load. `404.html` has no script.
+  the guard reports a failed start on every load. So nothing on the way there
+  may throw on what a browser can refuse: `m.js` reads `localStorage` inside a
+  `try`, since a browser keeping no site data throws on any access, and the
+  walk runs both pages with storage refused. `404.html` has no script.
   Page and site-file routes answer HEAD (`PAGE_METHODS`); FastAPI's docs routes
   are off.
 - **`security.txt` expires** on the date in `static/security.txt`; the website

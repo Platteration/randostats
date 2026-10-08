@@ -18,6 +18,7 @@ import re
 from urllib.parse import urlparse
 
 from conftest import PASSWORD, REPO, Watch, new_context
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from randostats import api
 
@@ -72,7 +73,9 @@ def test_the_desktop_app_runs_under_the_policy(browser, server, tmp_path):
 
     page.click('.tabs button[data-tab="timing"]')
     page.wait_for_selector("#heatmap svg rect.clickable")
-    # The swatches beside each name went from style="" to a class per hue.
+    # The swatches beside each name went from style="" to a class per hue. The
+    # table they sit in is drawn after a second request, after the heatmap.
+    page.wait_for_selector("#peaks table.data i.sw")
     swatches = page.eval_on_selector_all(
         "#peaks i.sw", "is => is.map(i => [i.className, getComputedStyle(i).backgroundColor])")
     assert swatches and all(re.fullmatch(r"sw hue[0-8]", c) for c, _ in swatches), swatches
@@ -172,9 +175,17 @@ def test_the_phone_app_runs_under_the_policy_and_offline(browser, server, tmp_pa
 
     page.click("#examples .chip >> nth=0")
     page.wait_for_selector("#cards article .punch")
-    page.wait_for_timeout(800)  # the share image is rendered while the card is read
-    with page.expect_download() as download:
-        page.click('#cards [data-act="share"]')
+    # The share image is rendered while the card is read, and Share before it is
+    # ready copies the text instead; so Share until the image is what comes back.
+    for _ in range(30):
+        try:
+            with page.expect_download(timeout=1000) as download:
+                page.click('#cards [data-act="share"]')
+            break
+        except PlaywrightTimeout:
+            continue
+    else:
+        raise AssertionError("Share never handed back the card as an image")
     saved = tmp_path / "card.png"
     download.value.save_as(saved)
     assert saved.read_bytes()[:8] == PNG
@@ -259,6 +270,29 @@ def test_the_safety_net(browser, server):
         assert page.is_visible(".guard-note"), path
         assert words in page.inner_text(".guard-note"), path
     off.close()
+
+
+def test_a_browser_that_keeps_no_site_data_still_starts_both_pages(browser, server):
+    """A browser told to keep no site data throws on any localStorage access. The
+    phone page reads one there as it starts (whether hands-free worked before); it
+    has to start anyway, and the safety net must not report a failure over
+    controls that work."""
+    watch = Watch(server.base)
+    context = new_context(browser)
+    context.add_init_script("Object.defineProperty(window, 'localStorage', "
+                            "{get() { throw new DOMException('The operation is insecure.', 'SecurityError'); }});")
+    page = context.new_page()
+    watch.attach(page)
+    for path, ready in (("/m", "#examples .chip"), ("/", "#tab-import.active")):
+        page.goto(server.base + path)
+        page.wait_for_selector(ready)
+        page.wait_for_timeout(300)
+        assert not page.is_visible("#guard-note"), path
+    page.goto(server.base + "/m")
+    page.click("#examples .chip >> nth=0")
+    page.wait_for_selector("#cards article .punch")
+    watch.check(page)
+    context.close()
 
 
 def test_the_not_found_page_and_the_files_that_are_not_the_site(browser, server):
