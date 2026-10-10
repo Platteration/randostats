@@ -21,7 +21,7 @@ STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / "m.db", use_llm=False)) as c:
+    with TestClient(create_app(tmp_path / "m.db", use_llm=False), base_url="http://localhost") as c:
         yield c
 
 

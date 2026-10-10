@@ -9,7 +9,7 @@ from randostats.api import create_app
 @pytest.fixture
 def client(tmp_path):
     app = create_app(tmp_path / "t.db", use_llm=False)
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         yield c
 
 
@@ -119,9 +119,9 @@ def test_pack_choice_survives_a_restart(tmp_path):
     from randostats.api import create_app
 
     db = tmp_path / "p.db"
-    with TestClient(create_app(db, use_llm=False)) as first:
+    with TestClient(create_app(db, use_llm=False), base_url="http://localhost") as first:
         first.post("/api/counterpoint/packs", json={"packs": ["money"], "voice": "victorian"})
-    with TestClient(create_app(db, use_llm=False)) as second:
+    with TestClient(create_app(db, use_llm=False), base_url="http://localhost") as second:
         cfg = second.get("/api/counterpoint/packs").json()
         assert cfg["voice"] == "victorian"
         assert {p["id"] for p in cfg["packs"] if p["enabled"]} == {"core", "money"}

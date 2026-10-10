@@ -120,7 +120,7 @@ def test_the_off_switch_wins_over_a_working_credential(monkeypatch):
 def test_the_endpoint_degrades_when_claude_says_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", lambda claim, group: None)
-    with TestClient(create_app(tmp_path / "llm.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm.db", use_llm=True), base_url="http://localhost") as client:
         assert client.get("/api/status").json()["llm"] is True
         body = client.post("/api/counterpoint", json={"text": "70% of people drink beer"}).json()
         assert body["results"], "the rule-based answer must still be there"
@@ -137,7 +137,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
     monkeypatch.setattr(llm, "available", lambda: True)
     monkeypatch.setattr(llm, "sharpen", sharpen)
-    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "llm2.db", use_llm=True), base_url="http://localhost") as client:
         body = client.post("/api/counterpoint", json={
             "text": "70% of people drink beer, and dinosaurs were 700 times older"}).json()
     assert len(calls) == 2, f"expected one call per claim, got {calls}"
@@ -146,7 +146,7 @@ def test_the_endpoint_sharpens_every_claim_in_one_sentence(tmp_path, monkeypatch
 
 
 def test_llm_is_off_unless_asked_for(tmp_path):
-    with TestClient(create_app(tmp_path / "off.db", use_llm=False)) as client:
+    with TestClient(create_app(tmp_path / "off.db", use_llm=False), base_url="http://localhost") as client:
         assert client.get("/api/status").json()["llm"] is False
         assert "llm" not in client.post("/api/counterpoint", json={"text": "70% of people"}).json()
 
@@ -188,5 +188,5 @@ def test_a_broken_credential_probe_never_stops_the_app_starting(monkeypatch, tmp
 
     monkeypatch.setattr(llm, "_get_client", explode)
     assert llm.available() is False
-    with TestClient(create_app(tmp_path / "probe.db", use_llm=True)) as client:
+    with TestClient(create_app(tmp_path / "probe.db", use_llm=True), base_url="http://localhost") as client:
         assert client.get("/api/status").json()["llm"] is False

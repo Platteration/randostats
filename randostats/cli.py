@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import parsers
 from .store import DEFAULT_DB, Store
+from .security import LOCAL_HOSTS, allowed_hostname, loopback_bind
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("serve", help="run the web app")
     s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--allow-host", action="append", default=[], metavar="HOST",
+                   help="allow an exact LAN/proxy hostname or IP; sharing exposes the archive unless the network/proxy controls access")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
 
@@ -32,11 +35,17 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "serve":
+        if not loopback_bind(args.host) and not args.allow_host:
+            ap.error("non-loopback serving requires --allow-host for the hostname/IP clients use; protect shared archive access with a trusted network or authenticated proxy")
+        try:
+            hosts = (*LOCAL_HOSTS, *(allowed_hostname(h) for h in args.allow_host))
+        except ValueError as exc:
+            ap.error(str(exc))
         import uvicorn
 
         from .api import create_app
 
-        uvicorn.run(create_app(args.db, use_llm=args.llm), host=args.host, port=args.port)
+        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts), host=args.host, port=args.port)
         return 0
 
     if args.cmd == "import":

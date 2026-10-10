@@ -68,7 +68,30 @@ received. The app says so when it notices, rather than letting you read a
 half-empty chart as a fact about your friends.
 
 The database lives at `data/randostats.db` by default; override with `--db` or
-`RANDOSTATS_DB`.
+`RANDOSTATS_DB`. New archive directories are private (0700), and SQLite
+files use 0600 on POSIX systems; existing unrelated parent directories are
+left alone. Restrict any shared parent directory yourself. These permission
+bits do not configure Windows ACLs.
+
+The server accepts loopback Host values and same-origin browser requests by
+default. For intentional phone/LAN use, opt in with an exact client-facing
+name or address, for example:
+
+```bash
+randostats serve --host 0.0.0.0 --allow-host 192.168.1.20
+```
+
+This exposes the whole API, including message reads and deletion. Host and
+Origin checks protect against browser rebinding and cross-site requests;
+they do not authenticate clients. Use a trusted network or an authenticated
+reverse proxy before sharing sensitive archives. Repeat `--allow-host` for
+additional names; wildcards are refused. Proxy requests must preserve the
+client-facing Host and scheme. Upload admission is per server process:
+at most two simultaneous imports, at most the configured upload limit plus
+1 MiB multipart overhead, checked before parsing and while receiving.
+Other request bodies are limited to 1 MiB. Additional workers multiply the
+in-flight limit. Body reception times out after 30 seconds without data or
+five minutes overall; staged request bodies use private temporary files.
 
 ## Counterpoint with Claude (optional)
 

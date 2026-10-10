@@ -19,6 +19,7 @@ from . import parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
+from .security import LOCAL_HOSTS, RequestBoundary
 
 STATIC = Path(__file__).with_name("static")
 
@@ -50,8 +51,10 @@ class CounterRequest(BaseModel):
     llm: bool = True
 
 
-def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None) -> FastAPI:
+def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
+               allowed_hosts: tuple[str, ...] = LOCAL_HOSTS) -> FastAPI:
     app = FastAPI(title="randostats", version="0.1.0")
+    app.add_middleware(RequestBoundary, allowed_hosts=allowed_hosts, upload_limit=lambda: MAX_UPLOAD_BYTES)
 
     @app.middleware("http")
     async def security_headers(request, call_next):
