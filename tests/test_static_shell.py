@@ -76,4 +76,6 @@ def test_repo_polish_docs_and_release_workflow_exist():
     text = release.read_text(encoding="utf-8")
     assert 'tags:' in text and '"v*"' in text
     assert "python -m build" in text
-    assert "upload-artifact@v4" in text
+    # Keep the release artifact action pinned to an immutable commit while
+    # accepting the v4 version comment used by the pinned form.
+    assert re.search(r"upload-artifact@(?:v4|[0-9a-f]{40})", text)
