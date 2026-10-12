@@ -199,10 +199,14 @@ randostats serve                     # http://127.0.0.1:8765
 Open the app, go to **Overview** or **Import**, and either click **Load sample data** or import
 your own export (see the help panel on the Import tab for how to export from each app).
 
-It answers only to `localhost`, `127.0.0.1` and `[::1]`, and refuses reads and
-writes that a browser tells it came from another site — anything carrying
-`Sec-Fetch-Site: cross-site`, or an `Origin` that is not the name it was asked
-under. A request that says nothing about where it came from is answered: that
+It answers only to `localhost`, `127.0.0.1` and `[::1]`: any other name, or a
+`Host` that is not one plain name and port, gets a 403. It refuses every API
+call, and every request but GET, HEAD and OPTIONS, that a browser tells it came
+from another site: a `Sec-Fetch-Site` other than `same-origin` or `none` (so
+`same-site`, another port or subdomain on this machine, too), or an `Origin`
+that is not exactly this one, scheme, name and port (`null` included). A page or
+a file fetched with GET is not refused, so a link from another site still opens
+the app. A request that says nothing about where it came from is answered: that
 is what keeps `curl` and `randostats import` working, and it is also what an
 older browser sends, since Firefox before 90 and Safari before 16.4 attach no
 `Sec-Fetch-Site` and a `no-cors` GET carries no `Origin` on any browser at
@@ -221,12 +225,17 @@ it under another name, say which, and set one:
 RANDOSTATS_PASSWORD='at least twelve characters' randostats serve --host 0.0.0.0 --allow-host laptop.lan
 ```
 
+`--allow-host` takes one exact host name or address, and can be repeated: no
+wildcard, URL or port, which are refused. A bind to every interface (`0.0.0.0`,
+`::`) needs at least one, since only the names you give reach it from
+elsewhere; binding one address serves that address as well.
+
 Those are not two independent guards. "Another site" is measured against the
 names this server answers to, so a name you add with `--allow-host` is a name
 it trusts completely: any page that can make your browser resolve that name to
-this machine — a hostile router, DNS on the local network, or plain DNS
-rebinding for `'*'` — can then read and delete everything, exactly as the
-front end can. Add a name only on a network where you would accept that.
+this machine — a hostile router, or DNS on the local network — can then read
+and delete everything, exactly as the front end can. Add a name only on a
+network where you would accept that.
 
 You can also import from the terminal:
 
@@ -253,7 +262,24 @@ received. The app says so when it notices, rather than letting you read a
 half-empty chart as a fact about your friends.
 
 The database lives at `data/randostats.db` by default; override with `--db` or
-`RANDOSTATS_DB`.
+`RANDOSTATS_DB`. The directories randostats creates for it are private (0700),
+and the database and the journal files SQLite keeps beside it are 0600, the
+database created that way before SQLite opens it. A directory that was already
+there is left as it is, so restrict a shared parent yourself; a database path,
+or a journal beside it, that is a symbolic link is refused. On Windows these
+permission bits do not set the ACLs.
+
+**Request bodies.** An import may be the upload limit (`RANDOSTATS_MAX_UPLOAD_MB`,
+256 by default) plus 8 KiB for the form around the file, and any other request
+1 MB. A declared `Content-Length` past that is refused before anything is read,
+and a body that declares none is counted as it arrives and stopped at the same
+limit (413); a `Content-Length` that is malformed, or that the body does not
+match, is a 400. The body is staged in a private temporary file before the form
+parser sees it, receiving it times out after 30 seconds without data or five
+minutes in all (408), and at most two imports run at once (a third is a 503).
+Those two are per server process, so more workers multiply them. With a
+password set, a request without a session is answered before its body is read,
+so it holds neither disk nor an import.
 
 ### Deploy
 
@@ -289,8 +315,10 @@ arrives on an address other than loopback.
 **HTTPS in front.** Over plain HTTP beyond loopback the password and the session
 cookie cross the network readable. Put a TLS terminator in front, keep
 randostats on 127.0.0.1 behind it, pass the original `Host` through (and name it
-with `--allow-host`), and let the response headers through untouched rather
-than add a policy of its own. With nginx, for example:
+with `--allow-host`) and the scheme in `X-Forwarded-Proto`, and let the response
+headers through untouched rather than add a policy of its own. An `Origin` is
+compared with the scheme uvicorn believes, so without that header every API call
+from the HTTPS page is refused as another origin. With nginx, for example:
 
 ```nginx
 server {
@@ -444,6 +472,7 @@ randostats/
                   misspellings, emoji, tone, search, wrapped
   store.py        SQLite persistence (idempotent imports, settings)
   auth.py         the password gate: RANDOSTATS_PASSWORD, sessions, the guess limit
+  security.py     the request boundary: Host, Origin and Fetch Metadata, body limits and admission
   counterpoint/   facts.json, myths.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
   api.py          FastAPI routes, and the host: the response headers, the 404 page, sign-in
   static/         desktop shell, shared frontend core, overview, hand-drawn SVG charts,

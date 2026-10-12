@@ -228,6 +228,31 @@ def test_the_factory_reads_the_password_from_the_environment(tmp_path, monkeypat
         create_app(tmp_path / "short.db", use_llm=False)
 
 
+def test_an_upload_without_a_session_is_refused_before_it_is_staged(gated, monkeypatch):
+    """The boundary stages every body to a private file, and an import takes one
+    of two slots while it does. Both are behind the gate: a client without a
+    session is answered from the headers, and costs neither disk nor a slot."""
+    from randostats import security
+
+    staged = []
+    real = security.tempfile.TemporaryFile
+
+    def counting(*args, **kwargs):
+        staged.append(True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(security.tempfile, "TemporaryFile", counting)
+    rows = b'[{"contact": "Alex", "sender": "Alex", "direction": "received", ' \
+           b'"timestamp": "2024-01-01T10:00:00", "text": "hi"}]'
+    form = {"files": {"file": ("m.json", rows)}, "data": {"self_name": "Sam", "fmt": "json"}}
+    assert gated.post("/api/import", **form).status_code == 401
+    assert staged == [], "a client without a session made the server stage its body"
+    sign_in(gated)
+    staged.clear()
+    assert gated.post("/api/import", **form).status_code == 200
+    assert staged == [True]
+
+
 # -- beyond loopback -------------------------------------------------------------
 
 def test_a_connection_beyond_loopback_needs_a_password(tmp_path):
@@ -288,10 +313,22 @@ def test_serve_on_loopback_needs_no_password(tmp_path, monkeypatch, host):
         assert c.get("/api/status").json()["auth"] is False
 
 
+@pytest.mark.parametrize("name", ["*", "*.lan", "http://laptop.lan", "laptop.lan:8765", "laptop lan"])
+def test_serve_takes_names_not_patterns(tmp_path, monkeypatch, capsys, name):
+    """A name to serve is trusted with everything (README, "Running it"), so it is
+    one exact name: '*' once turned the Host check off altogether."""
+    monkeypatch.setenv("RANDOSTATS_PASSWORD", PASSWORD)
+    status, served = _serve(monkeypatch, tmp_path, "--allow-host", name)
+    assert status == 2 and served == {}
+    assert repr(name) in capsys.readouterr().err
+    status, served = _serve(monkeypatch, tmp_path, "--host", name)
+    assert status == 2 and served == {}
+
+
 def test_serve_with_a_password_asks_for_it_wherever_it_binds(tmp_path, monkeypatch):
     monkeypatch.setenv("RANDOSTATS_PASSWORD", PASSWORD)
     for host in ("127.0.0.1", "0.0.0.0"):
-        status, served = _serve(monkeypatch, tmp_path, "--host", host)
+        status, served = _serve(monkeypatch, tmp_path, "--host", host, "--allow-host", "laptop.lan")
         assert status == 0
         with TestClient(served["app"], base_url=LOCAL) as c:
             assert c.get("/api/status").status_code == 401, host

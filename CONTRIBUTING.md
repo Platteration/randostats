@@ -67,4 +67,4 @@ Keep PRs focused enough that a regression can be isolated. Describe the user-vis
 
 ## Releases
 
-Pushing a tag matching `v*` runs the `release-build` workflow. It builds the wheel and source distribution, installs the wheel in a fresh virtual environment, runs `randostats --help`, and uploads the distribution files as a workflow artifact. It deliberately does **not** publish to PyPI or create a GitHub Release automatically.
+Every push runs the `packaged` job of the CI workflow (`.github/workflows/ci.yml`). It builds the wheel and source distribution with `python -m build`, installs the wheel, runs `randostats counter` from outside the checkout, and keeps the distribution files as an artifact of that run; a release takes them from the run of the commit it tags. It deliberately does **not** publish to PyPI or create a GitHub Release automatically.

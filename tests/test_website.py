@@ -113,7 +113,7 @@ def _requests(client):
     yield client.get("/api/no/such/route"), 404
     yield client.post("/"), 405
     yield client.post("/api/counterpoint", json={"nope": 1}), 422
-    yield client.get("/api/status", headers={"host": "attacker.example"}), 400
+    yield client.get("/api/status", headers={"host": "attacker.example"}), 403
     yield client.post("/api/counterpoint", json={"text": "x"}, headers={"sec-fetch-site": "cross-site"}), 403
     yield client.post("/api/counterpoint", content=b"x" * (api.MAX_JSON_BYTES + 1),
                       headers={"content-type": "application/json"}), 413

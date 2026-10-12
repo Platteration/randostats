@@ -6,6 +6,7 @@ One table, ``messages``, with a uniqueness constraint on
 
 from __future__ import annotations
 
+import errno
 import os
 import sqlite3
 import threading
@@ -94,12 +95,54 @@ def _make_private_dirs(path: Path) -> None:
         _private(directory, 0o700)
 
 
+# The files SQLite keeps beside a database while it writes: the rollback
+# journal, and in WAL mode the log and its shared-memory index. Each holds
+# pages of the database, so each is as private as the database itself.
+SIDECARS = ("-journal", "-wal", "-shm")
+
+
+def _sidecars(path: Path) -> list[Path]:
+    return [Path(str(path) + suffix) for suffix in SIDECARS]
+
+
+def _create_private(path: Path) -> None:
+    """Create the database file 0600 before SQLite opens it, and refuse links.
+
+    Narrowing it after the schema is written leaves the new file at whatever
+    the umask said for that long; creating it here with its final mode leaves
+    no such moment. O_NOFOLLOW refuses a symlink planted where the database
+    goes (in a shared directory another account can write to, it would point
+    the archive at a file of theirs), and a sidecar that is already a symlink
+    is refused for the same reason, since SQLite would write pages through it.
+    The fchmod also gives back the owner bits a umask such as 0300 takes away,
+    without which SQLite could not write the file it just created.
+    """
+    for sidecar in _sidecars(path):
+        if sidecar.is_symlink():
+            raise ValueError(f"{sidecar} is a symbolic link; SQLite would write the archive through it")
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:  # what O_NOFOLLOW answers for a symlink
+            raise ValueError(f"{path} is a symbolic link; pass the file it points to with --db") from exc
+        raise
+    try:
+        if hasattr(os, "fchmod"):  # not on Windows, whose ACLs these bits do not set
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:  # FAT or a network share, as in _private
+                pass
+    finally:
+        os.close(fd)
+
+
 class Store:
     def __init__(self, path: Path | str = DEFAULT_DB):
         self.path = Path(path)
         on_disk = str(self.path) != ":memory:"
         if on_disk:
             _make_private_dirs(self.path.parent)
+            _create_private(self.path)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # The API serves requests from a thread pool and shares one connection.
@@ -111,8 +154,12 @@ class Store:
             self._ensure_identity_index()
         if on_disk:
             # After the schema, so the file is certain to exist. An older
-            # database that was created 0644 is repaired here, not just a new one.
+            # database that was created 0644 is repaired here, not just a new
+            # one, and so is whatever journal it left beside it.
             _private(self.path, 0o600)
+            for sidecar in _sidecars(self.path):
+                if sidecar.exists():
+                    _private(sidecar, 0o600)
 
     def _ensure_identity_index(self) -> None:
         """Add the identity index, collapsing any duplicates an older build left."""

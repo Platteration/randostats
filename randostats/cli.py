@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import os
 import sys
 from pathlib import Path
@@ -11,21 +10,11 @@ from pathlib import Path
 from . import parsers
 from .auth import password_problem
 from .store import DEFAULT_DB, Store
+from .security import LOCAL_HOSTS, allowed_hostname, loopback_bind
 
 
-def _loopback(host: str) -> bool:
-    """Whether binding ``host`` keeps the server on this machine.
-
-    "localhost" and the loopback addresses (all of 127.0.0.0/8, and ::1) do. ""
-    "0.0.0.0" and "::" are every interface, and any other name is whatever it
-    resolves to, which is not something to take on trust.
-    """
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+# The three spellings of "every interface": uvicorn hands each straight to bind().
+BIND_ALL = ("0.0.0.0", "::", "")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -41,12 +30,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
-                   help="also answer requests whose Host header is NAME (repeatable). Only loopback names are "
-                        "served by default, so a page on the internet cannot point a name it owns at this port. "
-                        "NAME becomes a name this server trusts completely: the cross-site check measures "
-                        "'another site' against the names served, so any page that can make a browser resolve "
-                        "NAME to this machine can read and delete everything, exactly as the front end can. "
-                        "Pass '*' to accept any name at all, which is that with nothing left to resist it.")
+                   help="also answer requests whose Host header is NAME (repeatable): an exact host name or "
+                        "address, never a wildcard, a URL or a port. Only loopback names are served by default, "
+                        "so a page on the internet cannot point a name it owns at this port; a bind to every "
+                        "interface needs at least one. NAME becomes a name this server trusts completely: the "
+                        "cross-site check measures 'another site' against the names served, so any page that can "
+                        "make a browser resolve NAME to this machine can read and delete everything, exactly as "
+                        "the front end can.")
 
     i = sub.add_parser("import", help="import an export file from the terminal")
     i.add_argument("file", type=Path)
@@ -62,14 +52,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         import uvicorn
 
-        from .api import LOOPBACK_HOSTS, create_app
+        from .api import create_app
 
         # Binding to a name of your own means browsing to it, so it has to be
         # served; 0.0.0.0 and :: are binds, not names, and say nothing about
-        # what a browser will ask for.
-        hosts = [*LOOPBACK_HOSTS, *args.allow_host]
-        if args.host not in (*LOOPBACK_HOSTS, "0.0.0.0", "::", ""):
-            hosts.append(args.host)
+        # what a browser will ask for. Each name is an exact one: no wildcard,
+        # URL or port (security.allowed_hostname).
+        names = [*args.allow_host]
+        if args.host not in (*LOCAL_HOSTS, *BIND_ALL):
+            names.append(args.host)
+        hosts = [*LOCAL_HOSTS]
+        for name in names:
+            try:
+                hosts.append(allowed_hostname(name))
+            except ValueError:
+                print(f"error: {name!r} is not an exact host name or address. A name to serve is one\n"
+                      "       name: not a wildcard, a URL or a port.", file=sys.stderr)
+                return 2
         # The password comes from the environment, not an argument, so that it
         # is not in the shell history or in every `ps` listing on the machine.
         password = os.environ.get("RANDOSTATS_PASSWORD") or None
@@ -81,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         # straight to bind(), and bind(("", port)) is every interface. Filing
         # it with the loopback names here let the widest bind of the three be
         # the one that said nothing.
-        if not _loopback(args.host):
+        if not loopback_bind(args.host):
             if password is None:
                 # Everything imported, readable and deletable by whoever reaches the
                 # port: not something to start by accident, or with a warning.
@@ -90,6 +89,14 @@ def main(argv: list[str] | None = None) -> int:
                       "       export every message you have imported, and delete the lot. Set\n"
                       "       RANDOSTATS_PASSWORD (at least 12 characters) in the environment, or bind\n"
                       "       127.0.0.1 (the default).", file=sys.stderr)
+                return 2
+            if not names:
+                # Every interface, and no name a browser elsewhere would use: the
+                # Host check would refuse every client this bind exists to reach.
+                print(f"error: serving on {args.host or '0.0.0.0'} reaches beyond this machine, but only the\n"
+                      "       loopback names are served, so every other client would be refused. Name the\n"
+                      "       host or address they browse to with --allow-host (repeatable), for example\n"
+                      "       --allow-host laptop.lan.", file=sys.stderr)
                 return 2
             # Say what that still costs before it is served.
             print(f"warning: serving on {args.host or '0.0.0.0'}, which is not just this machine.\n"

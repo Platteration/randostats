@@ -865,6 +865,57 @@ def test_every_directory_this_app_makes_is_private_too(tmp_path):
         os.umask(kept)
 
 
+def test_sqlite_opens_a_file_that_is_already_private(tmp_path, monkeypatch):
+    """Narrowing the database after the schema is written leaves a new file at
+    whatever the umask said until then. It is created 0600 before SQLite ever
+    opens it, so there is no such moment."""
+    import sqlite3
+
+    from randostats import store as store_module
+
+    modes = []
+    real = sqlite3.connect
+
+    def connect(path, *args, **kwargs):
+        modes.append(stat.S_IMODE(os.stat(path).st_mode))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", connect)
+    kept = os.umask(0o022)
+    try:
+        Store(tmp_path / "new" / "randostats.db").close()
+    finally:
+        os.umask(kept)
+    assert modes == [0o600], f"SQLite opened a file that was {[oct(m) for m in modes]}"
+
+
+def test_a_database_or_a_journal_that_is_a_symlink_is_refused(tmp_path):
+    """In a directory another account can write to, a symlink planted where the
+    database or its journal goes would put the archive in a file of theirs."""
+    theirs = tmp_path / "theirs.db"
+    theirs.write_bytes(b"")
+    planted = tmp_path / "randostats.db"
+    planted.symlink_to(theirs)
+    with pytest.raises(ValueError, match="symbolic link"):
+        Store(planted)
+    (tmp_path / "other.db-journal").symlink_to(theirs)
+    with pytest.raises(ValueError, match="symbolic link"):
+        Store(tmp_path / "other.db")
+    assert theirs.read_bytes() == b"", "the archive was written through the link"
+
+
+def test_a_journal_an_older_build_left_behind_is_narrowed(tmp_path):
+    """SQLite gives the files it creates the database's mode, but one already
+    there keeps its own, and it holds pages of the database."""
+    db = tmp_path / "randostats.db"
+    Store(db).close()
+    index = tmp_path / "randostats.db-shm"
+    index.write_bytes(b"")
+    index.chmod(0o644)
+    Store(db).close()
+    assert stat.S_IMODE(index.stat().st_mode) == 0o600
+
+
 # -- who is allowed to talk to us -------------------------------------------
 # There is no login: whatever reaches the port reads every message. Both of
 # these came from a page on the internet being able to reach 127.0.0.1.
@@ -884,8 +935,13 @@ def test_a_host_header_we_do_not_serve_is_refused(client):
     same-origin request from the browser's point of view, so CORS never runs.
     The only thing that separates it from the real front end is the Host."""
     r = client.get("/api/messages", headers={"host": "attacker.example"})
-    assert r.status_code == 400 and "host" in r.json()["detail"]
-    assert client.delete("/api/messages", headers={"host": "attacker.example"}).status_code == 400
+    assert r.status_code == 403 and "host" in r.json()["detail"]
+    assert client.delete("/api/messages", headers={"host": "attacker.example"}).status_code == 403
+    # A Host that is not one plain name is not one we serve either: credentials,
+    # a path, a control character (security._authority; a second Host header is
+    # tests/test_request_boundary.py's, since a client sends only one).
+    for host in ("localhost@attacker.example", "localhost/x", "localhost\tx", "user:pw@localhost"):
+        assert client.get("/api/status", headers={"host": host}).status_code == 403, host
     # and the names it is actually reached by, with or without a port, still work
     for host in ("localhost", "127.0.0.1", "127.0.0.1:8765", "[::1]:8765"):
         assert client.get("/api/status", headers={"host": host}).status_code == 200, host
@@ -895,10 +951,13 @@ def test_another_name_is_served_only_when_it_is_asked_for(tmp_path):
     with TestClient(create_app(tmp_path / "named.db", use_llm=False, allowed_hosts=["stats.lan"]),
                     base_url="http://stats.lan") as c:
         assert c.get("/api/status").status_code == 200
-        assert c.get("/api/status", headers={"host": "attacker.example"}).status_code == 400
-    with TestClient(create_app(tmp_path / "any.db", use_llm=False, allowed_hosts=["*"]),
-                    base_url="http://whatever.example") as c:
-        assert c.get("/api/status").status_code == 200
+        assert c.get("/api/status", headers={"host": "attacker.example"}).status_code == 403
+    # No wildcard: "*" once turned the check off, and with it the only thing
+    # between DNS rebinding and an unauthenticated loopback server. A URL or a
+    # port is not a name either. Each is refused when the app is made.
+    for name in ("*", "*.example.com", "http://stats.lan", "stats.lan:8765"):
+        with pytest.raises(ValueError):
+            create_app(tmp_path / "any.db", use_llm=False, allowed_hosts=[name])
 
 
 def test_the_cli_only_serves_loopback_unless_told_otherwise(tmp_path, monkeypatch):
@@ -911,7 +970,7 @@ def test_the_cli_only_serves_loopback_unless_told_otherwise(tmp_path, monkeypatc
 
     cli.main(["--db", str(tmp_path / "cli.db"), "serve"])
     with TestClient(served["app"], base_url="http://stats.lan") as c:
-        assert c.get("/api/status").status_code == 400
+        assert c.get("/api/status").status_code == 403
 
     cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--allow-host", "stats.lan"])
     with TestClient(served["app"], base_url="http://stats.lan") as c:
@@ -939,6 +998,35 @@ def test_a_body_larger_than_the_cap_is_refused_before_it_is_parsed(client, monke
     assert client.post("/api/counterpoint", json={"text": "70% of people"}).status_code == 200
 
 
+def test_a_body_that_declares_no_length_is_held_to_the_cap_as_it_arrives(client, monkeypatch):
+    """A chunked body declares nothing, so the declared-length check never saw
+    it, and Starlette spooled all of it to disk before the handler measured it.
+    The boundary counts it as it arrives and stops at the cap, with the answer
+    the front end shows for an import that is too large."""
+    import randostats.api as api
+
+    monkeypatch.setattr(api, "MAX_UPLOAD_BYTES", 1024)
+
+    def upload():
+        for _ in range(10):
+            yield b"x" * 4096
+
+    r = client.post("/api/import", content=upload(),
+                    headers={"content-type": "multipart/form-data; boundary=zzz"})
+    assert "content-length" not in r.request.headers, "the test sent a declared length"
+    assert r.status_code == 413 and "RANDOSTATS_MAX_UPLOAD_MB" in r.json()["detail"]
+
+    def sentence():
+        yield b'{"text": "70% of people", "pad": "'
+        for _ in range(300):
+            yield b"x" * 4096
+        yield b'"}'
+
+    r = client.post("/api/counterpoint", content=sentence(), headers={"content-type": "application/json"})
+    assert r.status_code == 413 and "limit" in r.json()["detail"]
+    assert client.post("/api/counterpoint", json={"text": "70% of people"}).status_code == 200
+
+
 def test_serving_beyond_loopback_says_what_that_costs(tmp_path, monkeypatch, capsys):
     """--host 0.0.0.0 is a documented option. It needs RANDOSTATS_PASSWORD now (the
     bind-all test below, and tests/test_auth.py), and with one it still says what
@@ -954,7 +1042,8 @@ def test_serving_beyond_loopback_says_what_that_costs(tmp_path, monkeypatch, cap
     assert capsys.readouterr().err == "", "the loopback default warns about nothing"
 
     monkeypatch.setenv("RANDOSTATS_PASSWORD", "correct horse battery")
-    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0"]) == 0
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", "0.0.0.0",
+                     "--allow-host", "laptop.lan"]) == 0
     warning = capsys.readouterr().err
     assert "warning" in warning and "password" in warning and "delete" in warning
 
@@ -986,7 +1075,13 @@ def test_every_bind_all_says_it_is_a_bind_all(tmp_path, monkeypatch, capsys, hos
     assert "RANDOSTATS_PASSWORD" in refusal and "serving on , " not in refusal
 
     monkeypatch.setenv("RANDOSTATS_PASSWORD", "correct horse battery")
-    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host]) == 0
+    # Every interface, and only the loopback names to answer to: every client
+    # the bind exists for would be refused, so it does not start.
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host]) == 2
+    assert bound == {}, "nothing was served"
+    assert "--allow-host" in capsys.readouterr().err
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--host", host,
+                     "--allow-host", "laptop.lan"]) == 0
     assert bound["host"] == host, "whatever was asked for is what is bound"
     warning = capsys.readouterr().err
     assert "warning" in warning and "password" in warning and "delete" in warning
@@ -1070,6 +1165,19 @@ def test_a_cross_site_page_cannot_read_the_api_either(client):
     same = {"sec-fetch-site": "same-origin", "origin": "http://localhost"}
     assert client.get("/api/status", headers=same).status_code == 200
     assert client.get("/api/status").status_code == 200, "a client that names no site is not a cross-site one"
+
+
+def test_another_site_is_anything_but_this_exact_origin(client):
+    """Same-site is another port or a subdomain on this machine, not this app; an
+    https:// page is another origin than this http:// one; a sandboxed frame or a
+    redirected request says null. Each is refused on the API, and the default
+    port written out is still this origin."""
+    claim = {"text": "70% of people"}
+    for headers in ({"sec-fetch-site": "same-site"}, {"origin": "https://localhost"},
+                    {"origin": "http://localhost:8080"}, {"origin": "null"},
+                    {"origin": "http://localhost/path"}):
+        assert client.post("/api/counterpoint", json=claim, headers=headers).status_code == 403, headers
+    assert client.post("/api/counterpoint", json=claim, headers={"origin": "http://localhost:80"}).status_code == 200
 
 
 def test_a_caller_cannot_choose_the_memo_key(client):

@@ -6,6 +6,7 @@ randostats is deliberately small: a FastAPI/SQLite backend serves a no-build-ste
 
 - `randostats/api.py` owns HTTP routes and request/response validation, and is the website's host: it sets the one response-header policy on every response, serves the 404 page, `robots.txt` and `security.txt`, and refuses every path that is not part of the site.
 - `randostats/auth.py` is the password gate (`RANDOSTATS_PASSWORD`): sessions, the constant-time comparison, the guess limit, and `local_path` for the sign-in page's `next=`.
+- `randostats/security.py` is the request boundary: the Host, Origin and Fetch Metadata checks, run ahead of the gate, and body admission (size, timeouts, concurrent imports), run after it.
 - `randostats/store.py` owns SQLite persistence, settings, and import identity.
 - `randostats/stats.py` contains pure-ish statistical transforms over stored messages.
 - `randostats/parsers/` turns exports into the shared message model. Timestamp meaning is centralized in the timestamp parser helpers.
@@ -45,6 +46,6 @@ Imported data is untrusted. Prefer `textContent` and DOM construction. If HTML s
 
 `pytest` covers parsers, statistics, persistence, API behavior, Counterpoint logic, the website's headers and files, the password gate, and regression cases. CI also asks Node to parse every JavaScript entry point, and runs `pytest -q e2e`, which drives both front ends and the sign-in page in Chromium under the policy the server sends. `tests/test_static_shell.py` guards the no-build-step asset graph and the module boundary so an HTML reference or shared-core dependency cannot silently regress.
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`. The workflow builds both Python distributions, smoke-tests the wheel in a fresh virtual environment, and uploads the artifacts. It intentionally stops short of publishing them.
+Every push runs the `packaged` job of `.github/workflows/ci.yml`, which builds both Python distributions, installs the wheel and runs it from outside the checkout, and keeps both files as an artifact of that run. A release takes them from the run of the tagged commit; nothing publishes them automatically.
 
 For bug fixes, reproduce the bug in a test first when practical. For frontend-only bugs that are difficult to drive without a browser, keep changes narrow and add a static regression assertion when it can actually catch the failure mode.

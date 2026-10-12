@@ -24,6 +24,7 @@ from . import auth, parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
+from .security import LOCAL_HOSTS, MAX_BODY, SAFE_METHODS, RequestBoundary, upload_too_large
 
 STATIC = Path(__file__).with_name("static")
 
@@ -96,8 +97,9 @@ PAGE_METHODS = ["GET", "HEAD"]
 MAX_UPLOAD_BYTES = int(os.environ.get("RANDOSTATS_MAX_UPLOAD_MB", "256")) * 1024 * 1024
 
 # Nothing but an import sends a body at all, and those bodies are one short
-# sentence or a list of pack names.
-MAX_JSON_BYTES = 1024 * 1024
+# sentence or a list of pack names (security.py's MAX_BODY, for every route but
+# /api/import, which the boundary holds to MAX_UPLOAD_BYTES and this).
+MAX_JSON_BYTES = MAX_BODY
 # Boundary lines and part headers around the file itself.
 MULTIPART_OVERHEAD = 8 * 1024
 
@@ -108,11 +110,11 @@ MAX_SESSIONS = 256
 # Bound to loopback with no password, nothing here asks for one: whatever reaches
 # the port can read every message and delete the lot. A page on the internet can
 # point a name it owns at 127.0.0.1 (DNS rebinding) and then talk to this server
-# *same-origin*, so CORS never comes into it. Two checks stop that: the Host
-# header has to be a name we agreed to serve, and a mutating request has to come
-# from us. Anywhere else, RANDOSTATS_PASSWORD (auth.py) is the third.
-LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
-SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# *same-origin*, so CORS never comes into it. Two checks stop that, both in
+# security.py's screen: the Host header has to be a name we agreed to serve
+# (LOCAL_HOSTS, and what --allow-host adds), and an API call or a mutating
+# request has to come from us. Anywhere else, RANDOSTATS_PASSWORD (auth.py) is
+# the third.
 
 # A pasted article holds thousands of claims, and each one costs CPU here and,
 # with --llm, a paid API call. Bound the text, and the fan-out (see
@@ -169,34 +171,6 @@ def _contact(contact: str | None) -> str | None:
     through `known_contact` and comes back empty.
     """
     return contact or None
-
-
-def _too_large(limit: int) -> str:
-    megabytes = max(1, limit // (1024 * 1024))
-    return (f"file is larger than the {megabytes} MB limit; "
-            "raise RANDOSTATS_MAX_UPLOAD_MB if you really need to")
-
-
-def _declared_length(request) -> int:
-    """What the request says it is about to send, or 0 when it does not say."""
-    value = request.headers.get("content-length", "")
-    return int(value) if value.isdigit() else 0
-
-
-def _netloc(value: str) -> str:
-    """``host[:port]`` out of a Host or Origin header, lowercased."""
-    value = value.strip().lower()
-    if "//" in value:  # an Origin carries a scheme
-        value = value.split("//", 1)[1]
-    return value.split("/", 1)[0]
-
-
-def _hostname(value: str) -> str:
-    """The name on its own: no scheme, no port, no IPv6 brackets."""
-    netloc = _netloc(value)
-    if netloc.startswith("["):  # [::1]:8765
-        return netloc[1:].partition("]")[0]
-    return netloc.rpartition(":")[0] if netloc.count(":") == 1 else netloc
 
 
 def _beyond_loopback(request) -> bool:
@@ -280,10 +254,14 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     # page would load its script from a CDN the policy refuses), and the API is
     # spelled out in this file and in static/app.js.
     app = FastAPI(title="randostats", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
-    # Host names this server answers to. "*" turns the check off for someone
-    # who knows what they are doing (see `randostats serve --allow-host`).
-    hosts = {_hostname(h) for h in (LOOPBACK_HOSTS if allowed_hosts is None else allowed_hosts)}
-    any_host = "*" in hosts
+    # Host names this server answers to: exact names and addresses, never a
+    # wildcard (`randostats serve --allow-host`); anything else raises here.
+    # The screen runs in the guard below, ahead of the password gate; the same
+    # boundary's body admission runs inside it (see security.py).
+    boundary = {"allowed_hosts": LOCAL_HOSTS if allowed_hosts is None else allowed_hosts,
+                "upload_limit": lambda: MAX_UPLOAD_BYTES, "overhead": MULTIPART_OVERHEAD}
+    screen = RequestBoundary(None, **boundary).screen
+    app.add_middleware(RequestBoundary, **boundary, screened=True)
     # The password, from the CLI or, for `uvicorn --factory`, the environment. A
     # password too short to stand on a network is refused here, at start-up.
     if password is None:
@@ -292,33 +270,17 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     def refuse(request) -> JSONResponse | None:
         """Why this request must not be answered at all, if it must not."""
-        host = request.headers.get("host", "")
-        if not any_host and _hostname(host) not in hosts:
-            # A name that resolves to this machine is not a name we serve.
-            return JSONResponse({"detail": "invalid host header; pass --allow-host to serve this name"},
-                                status_code=400)
-        if gate is None and _beyond_loopback(request):
-            # `randostats serve` will not bind beyond loopback without a password,
-            # but `uvicorn --factory randostats.api:create_app --host 0.0.0.0` can,
-            # and then this is the only thing that knows. A browser on this machine
-            # still reaches it through 127.0.0.1; one across the network does not.
-            return JSONResponse({"detail": "this server is reachable from beyond this machine and has no "
-                                           "password; set RANDOSTATS_PASSWORD"}, status_code=403)
-        # multipart/form-data needs no CORS preflight, so /api/import is
-        # reachable from any page in the browser unless the browser's own
-        # account of where the request came from is checked.
-        site = request.headers.get("sec-fetch-site")
-        origin = request.headers.get("origin")
-        cross_site = (site is not None and site not in ("same-origin", "none")) or \
-                     (origin is not None and _netloc(origin) != _netloc(host))
+        # The Host, where the browser says the request came from, and the
+        # declared length: the boundary's screen, ahead of everything else.
+        #
         # A request that names no site at all is treated as first-party, which
         # is what keeps curl, `randostats import` and any other local script
         # working. A browser is not obliged to name one: Fetch attaches an
         # Origin to a GET only when the response tainting is cors, so a
         # cross-origin `fetch(url, {mode: "no-cors"})` carries none, and a
         # browser without Fetch Metadata (Firefox < 90, Safari < 16.4) sends
-        # no Sec-Fetch-Site either. On those the check below never fires. It
-        # is therefore the cheap half of the defence, not the whole of it:
+        # no Sec-Fetch-Site either. On those the cross-site check never fires.
+        # It is therefore the cheap half of the defence, not the whole of it:
         # what bounds the work a stranger can ask for is that every expensive
         # view keys its memo on a value this app chose (MAX_ROWS,
         # GAP_CHOICES, known_contact), which no header can route around.
@@ -327,25 +289,22 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         # - there are no CORS headers. It can still make this machine do the
         # work, and an aggregate view is seconds of CPU on a real corpus, so
         # a tab left open on any web page could hold a core indefinitely.
-        # Refuse those whatever the method. "/", "/static/*" and "/samples/*"
-        # stay open, so a bookmark or a typed URL still opens the app.
-        if cross_site and request.url.path.startswith("/api/"):
-            return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
-        if request.method not in SAFE_METHODS:
-            if cross_site:
-                return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
-            # Starlette spools a multipart body to a temporary file before the
-            # handler is ever called, so a check inside the handler bounds what
-            # the parser sees, not what the machine writes. Refuse on the
-            # length the request declares; the handler still checks what
-            # actually arrived, for a request that declares nothing.
-            if request.url.path == "/api/import":
-                if _declared_length(request) > MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD:
-                    return JSONResponse({"detail": _too_large(MAX_UPLOAD_BYTES)}, status_code=413)
-            elif _declared_length(request) > MAX_JSON_BYTES:
-                megabytes = MAX_JSON_BYTES // (1024 * 1024)
-                return JSONResponse({"detail": f"request body is larger than the {megabytes} MB limit"},
-                                    status_code=413)
+        # So the API is refused to another site whatever the method, and so is
+        # every method that changes something (multipart/form-data needs no
+        # CORS preflight, so /api/import is otherwise reachable from any page).
+        # "/", "/static/*" and "/samples/*" stay open to GET, so a link from
+        # another site, a bookmark or a typed URL still opens the app.
+        problem = screen(request.scope)
+        if problem is not None:
+            status, detail = problem
+            return JSONResponse({"detail": detail}, status_code=status)
+        if gate is None and _beyond_loopback(request):
+            # `randostats serve` will not bind beyond loopback without a password,
+            # but `uvicorn --factory randostats.api:create_app --host 0.0.0.0` can,
+            # and then this is the only thing that knows. A browser on this machine
+            # still reaches it through 127.0.0.1; one across the network does not.
+            return JSONResponse({"detail": "this server is reachable from beyond this machine and has no "
+                                           "password; set RANDOSTATS_PASSWORD"}, status_code=403)
         return None
 
     def gatekeep(request) -> JSONResponse | RedirectResponse | None:
@@ -549,12 +508,12 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
         # The multipart header usually declares the size; refuse before reading.
         declared = getattr(file, "size", None)
         if declared is not None and declared > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, _too_large(MAX_UPLOAD_BYTES))
+            raise HTTPException(413, upload_too_large(MAX_UPLOAD_BYTES))
         data = await file.read()
         if not data:
             raise HTTPException(400, "empty file")
         if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, _too_large(MAX_UPLOAD_BYTES))
+            raise HTTPException(413, upload_too_large(MAX_UPLOAD_BYTES))
         if fmt == "auto":
             try:
                 # Sniffing a zip opens it, which an archive with millions of

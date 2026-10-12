@@ -24,6 +24,9 @@ responses, user-supplied text rendered into a page), and the app as a website:
 - the response headers `randostats/api.py` sets on every response (the
   Content-Security-Policy and the others listed in README.md, "Deploy"), and
   anything that runs script or loads a resource the policy should refuse;
+- the request boundary (`randostats/security.py`): a request answered under a
+  name the server was not given, an API call or a change another site's page
+  gets answered, or a body past its limit that reaches the form parser;
 - the password gate (`RANDOSTATS_PASSWORD`, `randostats/auth.py`): a way to read
   or change data without the password, to keep a session past sign-out, to
   learn the password faster than the guess limit allows, or to be sent off the

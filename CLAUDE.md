@@ -112,8 +112,19 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   until the policy names it; name it there, in README's table and in the block,
   never as `'unsafe-inline'` or a wildcard. Trusted Types was measured and is
   not adopted (README says why).
+- **The boundary.** `security.py`, in two halves on either side of the gate.
+  `RequestBoundary.screen` decides from the headers (one exact `Host` from
+  `LOCAL_HOSTS` and `--allow-host`, never a wildcard; an `Origin` equal by
+  scheme, name and port and a `Sec-Fetch-Site` of `same-origin` or `none` on the
+  API and on every unsafe method; the declared length) and runs first in
+  `security_guard`, so its refusal carries the policy like any other answer.
+  Admission (the streamed cap, the timeouts, two imports at once, the private
+  staging file) is the same class added with `screened=True`, inside the guard,
+  so a client without a session stages nothing. One check, one place: do not
+  add a second Host or cross-site check in `api.py`.
 - **The gate.** `auth.py`. Loopback with no `RANDOSTATS_PASSWORD`: no login.
-  `serve` beyond loopback without one exits 2; `_beyond_loopback` refuses a
+  `serve` beyond loopback without one exits 2, and so does a bind to every
+  interface with no `--allow-host`; `_beyond_loopback` refuses a
   connection on a non-loopback address when the app was started some other way.
   With one: `PUBLIC_PATHS` and `/static/` need no session, everything else does
   (pages 303 to `/login?next=`, the rest 401). `local_path` is all that stands
