@@ -154,6 +154,9 @@ table.data th { color: var(--ink-2); font-weight: 500; }
 .top-end { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .top-end .status { margin-left: 0; }
 button.link { border: 0; background: none; padding: 0; border-radius: 4px; color: var(--ink-2); font-size: 12px; text-decoration: underline; }
+/* "Signed in as …" beside Sign out, after a Google sign-in: one line, a long address cut short. */
+.top-end .account { display: flex; align-items: baseline; gap: 8px; }
+#signed-in { color: var(--ink-2); font-size: 12px; max-width: min(40ch, 60vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The sign-in and not-found pages: one card in the middle, and room above it for
    the note, which has to stay at the top and full width. */
 .page-card { display: flex; flex-direction: column; min-height: 100vh; }

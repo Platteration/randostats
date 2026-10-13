@@ -31,6 +31,11 @@ responses, user-supplied text rendered into a page), and the app as a website:
   or change data without the password, to keep a session past sign-out, to
   learn the password faster than the guess limit allows, or to be sent off the
   site by the sign-in page;
+- sign-in with Google (`randostats/google.py`): a way in for a Google account
+  that `RANDOSTATS_GOOGLE_ALLOWED` does not list, a sign-in finished in someone
+  else's browser, an ID token accepted from anywhere but Google's token endpoint
+  over verified TLS (the one case OpenID Connect lets its signature go
+  unchecked), or being sent off the site by the return path;
 - a file served that is not part of the site.
 
 `/.well-known/security.txt` gives the same private reporting route. Its

@@ -11,14 +11,19 @@ same magnitude that has nothing to do with it.
 Everything runs locally. Your messages go into a SQLite file on your machine
 and never leave it. It is a website as well as a local app: `randostats serve`
 is the whole host, setting its own security headers, and served beyond your own
-machine it asks for a password on every request (see [Deploy](#deploy)).
+machine it asks everyone to sign in, with a password or a Google account you
+allow (see [Deploy](#deploy)).
 
 Two things do leave, both opt-in and both named where they happen: the
 Counterpoint tab's **Listen** button uses your browser's speech recognition,
 which in Chrome and Edge means the audio is transcribed by the browser vendor
 rather than on your device, and starting with `--llm` sends the claim being
 answered to the optional service described further down this page. Neither one
-touches your imported messages.
+touches your imported messages. A third is for a server set up for it: signing
+in with Google sends your browser to Google and back, and Google tells the
+server your account id and, if Google has verified it, your email address. The
+server keeps the address only in your session, in its memory, to say who is
+signed in, and asks Google nothing else; nothing of your messages goes to Google.
 
 ## What it does
 
@@ -218,8 +223,8 @@ varying a parameter to make the machine walk your whole history again has
 nothing left to vary but the row count. On loopback there is no login, so
 whatever reaches the port can read every message you imported, and a page on
 the internet can point a name it owns at 127.0.0.1 and try. Bound to anything
-wider, it does not start without a password (see [Deploy](#deploy)). To reach
-it under another name, say which, and set one:
+wider, it does not start without a password or sign-in with Google (see
+[Deploy](#deploy)). To reach it under another name, say which, and set one:
 
 ```bash
 RANDOSTATS_PASSWORD='at least twelve characters' randostats serve --host 0.0.0.0 --allow-host laptop.lan
@@ -296,8 +301,9 @@ environment, at least 12 characters: an environment variable, so it is in
 neither your shell history nor `ps`. Set it as well whenever something else on
 this machine publishes the port (a reverse proxy, a tunnel, a container's port
 mapping), since the server sees those connections arrive on loopback. With a
-password set, every page sends you to `/login` first, and the session then lasts
-30 days in an HttpOnly, SameSite=Lax cookie, Secure over HTTPS. **Sign out** in
+password set (or sign-in with Google, below), every page sends you to `/login`
+first, and the session then lasts 30 days in an HttpOnly, SameSite=Lax cookie,
+Secure over HTTPS. **Sign out** in
 the header ends that session wherever a copy of the cookie went; restarting the
 server ends them all, and is the way to change the password. The password is
 compared as two fixed-length HMAC digests in constant time. After eight wrong
@@ -314,8 +320,54 @@ through. What is the same for every visitor (`/static/`,
 the manifest, the service worker, `robots.txt`, `security.txt`) is served
 without a session; the two pages, the sample and the API are not. Run with
 `uvicorn --factory randostats.api:create_app` instead, the app reads
-`RANDOSTATS_PASSWORD` itself, and without one refuses every connection that
-arrives on an address other than loopback.
+`RANDOSTATS_PASSWORD` and the Google variables below itself, and with neither
+refuses every connection that arrives on an address other than loopback.
+
+**Or sign in with Google.** Instead of the password, or beside it, the server
+can let in the Google accounts you list. Set all four, in the environment:
+
+| Variable | What it is |
+| --- | --- |
+| `RANDOSTATS_APP_URL` | The site's own address, its root: `https://stats.example.com/`. Google sends the browser back to `RANDOSTATS_APP_URL` + `api/auth/google/callback`, so it is configured, never read from a request. https, or http for `localhost`, `127.0.0.1` and `[::1]` only (Google's rule too); no path, since randostats runs at the root of its origin. Its name has to be one the server answers to (`--allow-host`). |
+| `RANDOSTATS_GOOGLE_CLIENT_ID` | A Google OAuth client of type **Web application** (`….apps.googleusercontent.com`) whose authorised redirect URI is that callback address. |
+| `RANDOSTATS_GOOGLE_CLIENT_SECRET` | That client's secret. |
+| `RANDOSTATS_GOOGLE_ALLOWED` | Who may come in, separated by commas or spaces: Google account ids (the `sub`), or email addresses Google has verified, compared without regard to case. Prefer the id: an address is matched only when Google says it is verified, and Google speaks for an address with full authority only for Gmail and Google Workspace accounts. A first sign-in by an account not on the list is turned away, and the server's log names its id, which is how you find your own. |
+
+Set any of the last three and the server takes it that you asked for sign-in
+with Google: if any of the four is missing or malformed, or the address names a
+host the server does not answer to, `randostats serve` (and `create_app`) will
+not start, naming the variable and never its value. `RANDOSTATS_APP_URL` alone
+turns nothing on. With it set up, the sign-in page offers **Sign in with
+Google** (beside the password form when there is a password, alone when there is
+not), and Google counts as the sign-in a server beyond loopback needs. It is the
+authorization code flow of OpenID Connect with PKCE (S256): the state, a nonce,
+the code verifier and the page to come back to travel in a
+`__Host-randostats-oauth` cookie (HttpOnly, Secure, SameSite=Lax, ten minutes)
+signed with a key the server draws when it starts, so a restart ends a sign-in
+in progress as it ends the sessions. Google's answer is accepted only with that
+cookie and its state; the code is redeemed at Google's token endpoint, a fixed
+address, over HTTPS with the system's certificate store and host name checked and
+no redirect followed. The ID token that comes back is read, not checked against
+Google's signing keys: OpenID Connect Core 1.0, section 3.1.3.7, item 6 lets the
+TLS validation of the token endpoint stand in for the signature when the token
+came straight from it, as it does here, which is what keeps this in Python's
+standard library. Its claims are all checked: the issuer is Google, the audience
+(and the authorised party, when there is one) is your client, it has not expired
+and was not issued in the future (a minute's leeway either way), the nonce is
+this sign-in's, and the account id is well formed. Each redemption counts against
+the same limit as a wrong password, since anyone can start a sign-in. A sign-in
+that does not complete comes back to `/login` with "Sign-in didn't complete.";
+one that does gets the same 30-day session as the password, and the header says
+"Signed in as" the address (or "Signed in with Google"). The redirect URI must
+be registered in Google Cloud exactly as the server writes it. To set it up:
+
+1. In Google Cloud, a project and its OAuth consent screen (app name, support
+   email, your domain; for one owner, "Testing" with yourself as a test user is
+   enough). The scopes are `openid email`, which need no verification review.
+2. Credentials → Create credentials → OAuth client ID → **Web application**,
+   with the authorised redirect URI `https://stats.example.com/api/auth/google/callback`.
+3. The four variables above in the service's environment, and the site's name
+   served: `randostats serve --allow-host stats.example.com`.
 
 **HTTPS in front.** Over plain HTTP beyond loopback the password and the session
 cookie cross the network readable. Put a TLS terminator in front, keep
@@ -386,11 +438,11 @@ the second is ignored.
 | `default-src 'none'` | Anything not named below is refused: fonts, frames, media, plugins and every other origin. |
 | `script-src 'self'`, `style-src 'self'` | The app's own files only. Nothing inline: the charts used to write `style=""` attributes and now set the same declarations through the CSSOM or a class. |
 | `img-src 'self' blob:` | The icons `/m` links, and the two share images (the Wrapped PNG and the phone's card), drawn through `blob:` URLs. No `data:`. |
-| `connect-src 'self'` | The API. Nothing else is fetched. |
+| `connect-src 'self'` | The API. Nothing else is fetched: sign-in with Google is a top-level navigation to Google and back, which the policy does not govern, and nothing of Google's (script, frame, image or font) is loaded. |
 | `manifest-src 'self'`, `worker-src 'self'` | `/m`'s manifest and its service worker. The worker would run under `script-src 'self'` without the second (CSP falls back to it); it is stated so that a change to `script-src` cannot change what may run as a worker. |
 | `base-uri 'none'`, `object-src 'none'`, `form-action 'none'` | No `<base>`, no plugins, and no native form submission: the import form and the sign-in form are submitted by script. |
 | `frame-ancestors 'none'`, `X-Frame-Options: DENY` | Nothing may frame it (clickjacking); the second for browsers before CSP 2. |
-| `Referrer-Policy: no-referrer` | A URL here can carry a contact's name or the sign-in page's `next=`. |
+| `Referrer-Policy: no-referrer` | A URL here can carry a contact's name or the sign-in page's `next=`; the navigation to Google's sign-in carries no address of this site either. |
 | `Permissions-Policy` | Every feature off but the microphone (Listen, and the phone's hands-free probe) and clipboard-write (the phone's Copy). The walk reads it back from Chromium. |
 | `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy` | `same-origin`: no other window keeps a handle on this one, and no other site embeds its responses. |
 
@@ -448,7 +500,10 @@ The browser walk starts `randostats serve` itself and fails on any Content
 Security Policy violation, page error, console error, failed request, request to
 another origin, or response whose headers are not the policy; it also stops the
 server to open the phone app from its offline cache, and checks the safety net,
-the 404 page, the files that must not be served and the sign-in flow.
+the 404 page, the files that must not be served and both sign-in flows: the
+password, and Google, whose sign-in page the walk answers itself at the protocol
+while the server redeems the code at the fake token endpoint in
+`tests/fake_google.py` (`e2e/google_server.py`), never at an address of its own.
 
 CI runs both on Python 3.10 and 3.12, with and without the `llm` extra, and
 the browser walk after them, then installs the built package and runs it from outside the checkout, which
@@ -476,7 +531,8 @@ randostats/
   stats.py        overview, frequency, timing, reply latency, conversation health, words,
                   misspellings, emoji, tone, search, wrapped
   store.py        SQLite persistence (idempotent imports, settings)
-  auth.py         the password gate: RANDOSTATS_PASSWORD, sessions, the guess limit
+  auth.py         the gate: RANDOSTATS_PASSWORD, sessions, the guess limit
+  google.py       sign-in with Google: the code flow with PKCE, the claims, RANDOSTATS_GOOGLE_ALLOWED
   security.py     the request boundary: Host, Origin and Fetch Metadata, body limits and admission
   counterpoint/   facts.json, myths.json, packs/, voices/, engine.py, packs.py, llm.py (optional Claude)
   api.py          FastAPI routes, and the host: the response headers, the 404 page, sign-in

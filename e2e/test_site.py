@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import http.client
 import re
+import sys
 from urllib.parse import urlparse
 
 from conftest import PASSWORD, REPO, Watch, new_context
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
-from randostats import api
+from randostats import api, google
+
+sys.path.insert(0, str(REPO / "tests"))
+import fake_google  # noqa: E402
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -360,6 +364,9 @@ def test_signing_in(browser, gated):
     assert page.url == gated.base + "/login?next=%2Fm"
     page.wait_for_selector("#sign-in")
     assert not page.is_visible("#guard-note")
+    # /api/config says there is no sign-in with Google here: none is offered.
+    page.wait_for_timeout(300)
+    assert page.is_hidden("#google-sign-in") and page.is_visible("#password")
     page.fill("#password", "not the password at all")
     page.click("#sign-in button")
     page.wait_for_selector("#sign-in-result:has-text('not the password')")
@@ -389,3 +396,135 @@ def test_signing_in(browser, gated):
     page.wait_for_selector("#tab-import.active")
     watch.check(page)
     context.close()
+
+
+def google_signs_in(context, page, account: dict) -> None:
+    """Google's sign-in page, played by the walk: ``account["as"]`` agrees, and Google
+    sends the browser back to the server's callback (tests/fake_google.py). At the
+    protocol, not through page.route: the browser reaches Google by the redirect the
+    start route answers with, and Playwright hands a redirected request to the
+    network, route or no route. Chromium's own interception pauses it like any other.
+    The server's half, the token endpoint, is the fake e2e/google_server.py hands it."""
+    cdp = context.new_cdp_session(page)
+    cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "https://accounts.google.com/*", "requestStage": "Request"}]})
+
+    def paused(event):
+        try:
+            answer = {"responseCode": 302, "responseHeaders": [
+                {"name": "Location", "value": fake_google.authorize(event["request"]["url"], account["as"])}]}
+        except ValueError as refused:  # a request Google would not show: the walk fails where it lands
+            answer = {"responseCode": 400, "responseHeaders": [{"name": "X-Refused", "value": str(refused)}]}
+        account["asked"] += 1
+        cdp.send("Fetch.fulfillRequest", {"requestId": event["requestId"], **answer, "body": ""})
+
+    cdp.on("Fetch.requestPaused", paused)
+
+
+def test_signing_in_with_google(browser, google_only):
+    """Sign-in with Google and no password: the sign-in page offers Google alone, the
+    owner's account comes back signed in to the page that asked, says who it is beside
+    Sign out, and signs out; an account not on the list is told the sign-in did not
+    complete. All of it under the policy, with nothing loaded from Google and no
+    request leaving the site but the navigation to Google's sign-in page, which the
+    walk answers. The phone's worker is installed while it happens and stays out of it
+    (its scope is /m)."""
+    base = google_only.base
+    watch = Watch(base, elsewhere=(google.AUTHORIZE_URL + "?",))
+    context = new_context(browser)
+    page = context.new_page()
+    watch.attach(page)
+    account = {"as": fake_google.OWNER, "asked": 0}
+    google_signs_in(context, page, account)
+
+    # A sign-in page whose server answers no /api/config draws no Google: it stays as it
+    # was. On a page of its own, outside the watch: the 404 is the walk's stub, not the
+    # site's, and the page leaves its body unread, so Chromium aborts it on the way out.
+    stub = context.new_page()
+    stub.route("**/api/config", lambda route: route.fulfill(status=404, content_type="application/json",
+                                                            body='{"detail": "Not Found"}'))
+    with stub.expect_response("**/api/config") as config:
+        stub.goto(base + "/login")
+    assert config.value.status == 404
+    stub.wait_for_timeout(300)
+    assert stub.is_hidden("#google-sign-in") and stub.is_visible("#password")
+    stub.close()
+
+    page.goto(base + "/m")
+    assert page.url == base + "/login?next=%2Fm"
+    page.wait_for_selector("#google-sign-in:not([hidden])")
+    assert page.is_hidden("#sign-in"), "no password here: no password form"
+    assert page.get_attribute("#google-start", "href") == "/api/auth/google/start?return=%2Fm"
+    page.click("#google-start")
+    page.wait_for_url(base + "/m")
+    page.wait_for_selector("#examples .chip")
+    assert account["asked"] == 1
+    cookies = {c["name"]: c for c in context.cookies()}
+    assert google.FLOW_COOKIE not in cookies, "the sign-in cookie is spent"
+    session = cookies["randostats_session"]
+    assert session["httpOnly"] and session["sameSite"] == "Lax" and not session["secure"]
+    # Polled with evaluate: wait_for_function builds its poller with eval, which the
+    # page's own script-src refuses once the page has come back through the redirects.
+    for _ in range(100):
+        if page.evaluate("navigator.serviceWorker.controller !== null"):
+            break
+        page.wait_for_timeout(100)
+    else:
+        raise AssertionError("the phone's worker never took control of /m")
+
+    page.goto(base + "/")
+    page.wait_for_selector("#tab-import.active")
+    page.wait_for_selector("#signed-in:not([hidden])")
+    assert page.inner_text("#signed-in") == f"Signed in as {fake_google.OWNER['email']}"
+    page.click("#sign-out")
+    page.wait_for_url(base + "/login")
+    assert "randostats_session" not in {c["name"] for c in context.cookies()}
+
+    # Someone else's Google account: not on the list, so back to the sign-in page, told once.
+    account["as"] = fake_google.STRANGER
+    page.wait_for_selector("#google-sign-in:not([hidden])")
+    page.click("#google-start")
+    page.wait_for_selector("#sign-in-result:has-text(\"Sign-in didn't complete.\")")
+    assert page.url == base + "/login", "the note is shown once, and the address no longer asks for it"
+    assert "randostats_session" not in {c["name"] for c in context.cookies()}
+
+    # The owner again, from the sign-in page itself: back to the app's front page.
+    account["as"] = fake_google.OWNER
+    page.click("#google-start")
+    page.wait_for_url(base + "/")
+    page.wait_for_selector("#signed-in:not([hidden])")
+    assert account["asked"] == 3
+    watch.check(page)
+    context.close()
+
+
+def test_the_sign_in_cookie_is_read_by_its_exact_name(google_only):
+    """A cookie named with a raw 0xA0 or 0x85 byte before the sign-in cookie's name
+    is another cookie to a browser, and one a sibling subdomain or a plain-http answer
+    may set; Chromium stores and sends it. Starlette's own parser would strip the byte
+    and read it as the __Host- one. Sent over a socket as the bytes a browser sends
+    (the test client cannot), it finishes no sign-in; the same cookie by its own name
+    does."""
+    host = urlparse(google_only.base).netloc
+
+    def get(path, cookie=b""):
+        connection = http.client.HTTPConnection(host, timeout=10)
+        connection.putrequest("GET", path)
+        if cookie:
+            connection.putheader("Cookie", cookie)
+        connection.endheaders()
+        answer = connection.getresponse()
+        answer.read()
+        connection.close()
+        return answer
+
+    for prefix, signed_in in ((b"\xa0", False), (b"\x85", False), (b"", True)):
+        start = get(google.START)
+        assert start.status == 302
+        sealed = next(v for k, v in start.getheaders() if k.lower() == "set-cookie" and v.startswith(google.FLOW_COOKIE))
+        value = sealed.split("=", 1)[1].split(";", 1)[0]
+        back = urlparse(fake_google.authorize(start.getheader("Location"), fake_google.OWNER))
+        answer = get(f"{back.path}?{back.query}", prefix + f"{google.FLOW_COOKIE}={value}".encode("ascii"))
+        assert answer.status == 302, prefix
+        assert (answer.getheader("Location") == "/") is signed_in, (prefix, answer.getheader("Location"))
+        if not signed_in:
+            assert answer.getheader("Location") == "/login?signin=failed", prefix

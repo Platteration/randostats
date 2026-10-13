@@ -48,18 +48,22 @@ class Server:
                 self.process.kill()
 
 
-def start(tmp_path: Path, password: str | None = None) -> Server:
-    """`randostats serve` on loopback, with a database of its own."""
+def start(tmp_path: Path, password: str | None = None, google: bool = False) -> Server:
+    """`randostats serve` on loopback, with a database of its own. With ``google``, the
+    same app with sign-in with Google set up and Google's token endpoint answered by
+    tests/fake_google.py (e2e/google_server.py)."""
     port = _free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith("RANDOSTATS_")}
     if password:
         env["RANDOSTATS_PASSWORD"] = password
     log = tmp_path / f"server-{port}.log"
+    db = str(tmp_path / f"e2e-{port}.db")
+    if google:
+        command = [sys.executable, str(REPO / "e2e" / "google_server.py"), db, str(port), password or ""]
+    else:
+        command = [sys.executable, "-m", "randostats.cli", "--db", db, "serve", "--port", str(port)]
     with log.open("wb") as out:
-        process = subprocess.Popen(
-            [sys.executable, "-m", "randostats.cli", "--db", str(tmp_path / f"e2e-{port}.db"),
-             "serve", "--port", str(port)],
-            cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(command, cwd=REPO, env=env, stdout=out, stderr=subprocess.STDOUT)
     server = Server(f"http://127.0.0.1:{port}", process, log)
     deadline = time.monotonic() + 30
     while True:
@@ -96,6 +100,9 @@ class Watch:
 
     base: str
     expected: set = field(default_factory=set)  # (status, path) pairs a test asks for
+    # Addresses elsewhere a test sends the browser to on purpose, by prefix: Google's
+    # authorize page, which the sign-in walk answers itself and nothing reaches.
+    elsewhere: tuple = ()
     problems: list = field(default_factory=list)
     responses: int = 0
 
@@ -121,7 +128,7 @@ class Watch:
 
     def _request(self, request) -> None:
         url = request.url
-        if not url.startswith((self.base + "/", "blob:", "data:")):
+        if not url.startswith((self.base + "/", "blob:", "data:", *self.elsewhere)):
             self.problems.append(("request outside the site", url))
 
     def _failed(self, request) -> None:
@@ -181,6 +188,14 @@ def server(tmp_path):
 @pytest.fixture
 def gated(tmp_path):
     running = start(tmp_path, PASSWORD)
+    yield running
+    running.stop()
+
+
+@pytest.fixture
+def google_only(tmp_path):
+    """Sign-in with Google and no password: the one way in."""
+    running = start(tmp_path, google=True)
     yield running
     running.stop()
 

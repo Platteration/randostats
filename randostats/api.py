@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import threading
 import uuid
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import auth, parsers, stats
+from . import auth, google, parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
@@ -82,12 +83,13 @@ HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
 }
-# Paths a visitor reaches without a session when a password is set: the sign-in
-# page and its two endpoints, and files that are the same for every visitor and
-# carry none of anyone's data. Everything else - the two pages, the sample, every
-# other /api/ route, and any path at all that is not here - needs one.
-PUBLIC_PATHS = frozenset({"/login", "/api/login", "/api/logout", "/sw.js", "/manifest.webmanifest",
-                          "/robots.txt", "/.well-known/security.txt"})
+# Paths a visitor reaches without a session when the gate is on: the sign-in page,
+# what it reads (which ways in there are) and calls (the password, sign-out and the
+# two halves of sign-in with Google), and files that are the same for every visitor
+# and carry none of anyone's data. Everything else - the two pages, the sample,
+# every other /api/ route, and any path at all that is not here - needs one.
+PUBLIC_PATHS = frozenset({"/login", "/api/config", "/api/login", "/api/logout", google.START, google.CALLBACK,
+                          "/sw.js", "/manifest.webmanifest", "/robots.txt", "/.well-known/security.txt"})
 PUBLIC_PREFIX = "/static/"
 NOT_FOUND_PAGE = (STATIC / "404.html").read_text(encoding="utf-8")
 # A page or a site file answers HEAD as well as GET, as a web server's files do: link
@@ -248,8 +250,16 @@ class SignIn(BaseModel):
     next: str | None = Field(None, max_length=2048)
 
 
+log = logging.getLogger("randostats")
+
+
 def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
-               allowed_hosts: Sequence[str] | None = None, password: str | None = None) -> FastAPI:
+               allowed_hosts: Sequence[str] | None = None, password: str | None = None,
+               google_config: google.GoogleConfig | None = None, fetch: google.Fetch | None = None) -> FastAPI:
+    """The app. ``password`` and ``google_config`` default to what the environment
+    sets (RANDOSTATS_PASSWORD, and the variables google.read_config reads), and either
+    turns the gate on. ``fetch`` is how the server reaches Google's token endpoint;
+    the tests pass a fake that answers it, and nothing else changes where it goes."""
     # No /docs, /redoc or /openapi.json: they are not part of the site (the Swagger
     # page would load its script from a CDN the policy refuses), and the API is
     # spelled out in this file and in static/app.js.
@@ -260,13 +270,22 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
     # boundary's body admission runs inside it (see security.py).
     boundary = {"allowed_hosts": LOCAL_HOSTS if allowed_hosts is None else allowed_hosts,
                 "upload_limit": lambda: MAX_UPLOAD_BYTES, "overhead": MULTIPART_OVERHEAD}
-    screen = RequestBoundary(None, **boundary).screen
+    screener = RequestBoundary(None, **boundary)
+    screen = screener.screen
     app.add_middleware(RequestBoundary, **boundary, screened=True)
     # The password, from the CLI or, for `uvicorn --factory`, the environment. A
     # password too short to stand on a network is refused here, at start-up.
     if password is None:
         password = os.environ.get("RANDOSTATS_PASSWORD") or None
-    gate = auth.Gate(password) if password is not None else None
+    # Sign-in with Google, the same way: half set up is refused at start-up, and
+    # so is an address this server would refuse Google's answer at.
+    if google_config is None:
+        google_config = google.read_config(os.environ)
+    if google_config is not None and google_config.hostname not in screener.hosts:
+        raise ValueError(f"{google.APP_URL} names {google_config.hostname}, which this server does not "
+                         f"answer to: serve it with --allow-host {google_config.hostname}")
+    gate = auth.Gate(password) if password is not None or google_config is not None else None
+    signin = google.GoogleSignIn(google_config, fetch=fetch) if google_config is not None else None
 
     def refuse(request) -> JSONResponse | None:
         """Why this request must not be answered at all, if it must not."""
@@ -304,7 +323,8 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             # and then this is the only thing that knows. A browser on this machine
             # still reaches it through 127.0.0.1; one across the network does not.
             return JSONResponse({"detail": "this server is reachable from beyond this machine and has no "
-                                           "password; set RANDOSTATS_PASSWORD"}, status_code=403)
+                                           "password and no sign-in with Google; set RANDOSTATS_PASSWORD"},
+                                status_code=403)
         return None
 
     def gatekeep(request) -> JSONResponse | RedirectResponse | None:
@@ -459,23 +479,44 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
 
     # -- import ---------------------------------------------------------------
     @app.get("/api/status")
-    def status():
+    def status(request: Request):
         return {
             "messages": store.count(),
             "contacts": len(store.contacts()),
             "self_name": store.get_setting("self_name", ""),
             "formats": sorted(parsers.PARSERS),
             "llm": llm_on,
-            # Whether a password is set, so the page knows to offer Sign out.
+            # Whether the gate is on, so the page knows to offer Sign out.
             "auth": gate is not None,
+            # Who a Google sign-in said this is ({"email"?}), for "Signed in as";
+            # null for a password session, or with no gate.
+            "user": gate.account(request.cookies.get(auth.COOKIE)) if gate is not None else None,
         }
 
-    # -- signing in (only with RANDOSTATS_PASSWORD) -----------------------------
+    # -- signing in (with RANDOSTATS_PASSWORD, sign-in with Google, or both) --------
     if gate is not None:
         @app.api_route("/login", methods=PAGE_METHODS, include_in_schema=False)
         def sign_in_page():
             return FileResponse(STATIC / "login.html")
 
+        @app.get("/api/config")
+        def sign_in_config():
+            # The ways in, for the sign-in page: it draws what is on and nothing
+            # else. The shape is the one every app of this family answers; nothing
+            # is sold here, so the shop lists nothing.
+            return {"auth": {"google": signin is not None, "password": gate.has_password},
+                    "shop": {"products": []}}
+
+        @app.post("/api/logout")
+        def sign_out(request: Request):
+            # Ends the session itself, so a copy of the cookie elsewhere is dead too.
+            gate.revoke(request.cookies.get(auth.COOKIE))
+            response = JSONResponse({"ok": True})
+            response.delete_cookie(auth.COOKIE, path="/", httponly=True, samesite="lax",
+                                   secure=request.scope.get("scheme") == "https")
+            return response
+
+    if gate is not None and gate.has_password:
         @app.post("/api/login")
         async def sign_in(form: SignIn, request: Request):
             # async, so the count, the comparison and the reset run on the event
@@ -493,13 +534,50 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                                 httponly=True, samesite="lax", secure=request.scope.get("scheme") == "https")
             return response
 
-        @app.post("/api/logout")
-        def sign_out(request: Request):
-            # Ends the session itself, so a copy of the cookie elsewhere is dead too.
-            gate.revoke(request.cookies.get(auth.COOKIE))
-            response = JSONResponse({"ok": True})
-            response.delete_cookie(auth.COOKIE, path="/", httponly=True, samesite="lax",
-                                   secure=request.scope.get("scheme") == "https")
+    if signin is not None:
+        @app.get(google.START)
+        def google_start(request: Request):
+            # A GET, since starting a sign-in changes nothing another site could use:
+            # the state checked at the callback is what stops a sign-in forced on
+            # someone. The cookie is SameSite=Lax so that Google's redirect back, a
+            # top-level navigation from another site, still carries it.
+            location, sealed = signin.start(request.query_params.get("return"))
+            response = RedirectResponse(location, status_code=302)
+            response.set_cookie(google.FLOW_COOKIE, sealed, max_age=google.FLOW_SECONDS, path="/",
+                                secure=True, httponly=True, samesite="lax")
+            return response
+
+        @app.get(google.CALLBACK)
+        def google_callback(request: Request):
+            # Sync, so Starlette runs it on a worker thread: the token exchange is a
+            # blocking HTTPS call of up to ten seconds, and the event loop is shared.
+            client = request.client.host if request.client else ""
+            try:
+                flow = signin.check(google.read_cookie(request.headers.get("cookie"), google.FLOW_COOKIE),
+                                    request.query_params)
+                # Each exchange is a call to Google, made for whoever holds a fresh
+                # sign-in cookie, which anyone can get: so it counts against the same
+                # per-client and global budgets as a password guess.
+                wait = gate.admit(client)
+                if wait:
+                    raise google.Refused("busy")
+                identity = signin.redeem(flow, request.query_params.get("code"))
+                if not google_config.allows(identity):
+                    # The account id (checked to be letters, digits, - and _), never the
+                    # email: the owner reads it here to put their own on the list.
+                    raise google.Refused(f"the Google account {identity.sub} is not in {google.ALLOWED}")
+            except google.Refused as refused:
+                # Never Google's own words: the reason is one of google.py's.
+                log.warning("randostats: sign-in with Google refused (%s)", refused.reason)
+                response = RedirectResponse("/login?signin=failed", status_code=302)
+            else:
+                gate.forget(client)
+                account = {"email": identity.email} if identity.email else {}
+                response = RedirectResponse(flow.back, status_code=302)
+                response.set_cookie(auth.COOKIE, gate.issue(account), max_age=auth.SESSION_DAYS * 86400,
+                                    path="/", httponly=True, samesite="lax",
+                                    secure=google_config.secure or request.scope.get("scheme") == "https")
+            response.delete_cookie(google.FLOW_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
             return response
 
     @app.post("/api/import")

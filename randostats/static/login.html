@@ -14,11 +14,12 @@
 <main class="site-card">
   <div class="brand"><span class="logo">%</span> randostats</div>
   <h1>Sign in</h1>
-  <p class="muted">This randostats was started with a password (RANDOSTATS_PASSWORD). Everyone who reaches it is asked for it.</p>
+  <p class="muted">Everyone who reaches this randostats is asked to sign in first.</p>
   <form id="sign-in" class="sign-in-form">
     <label>Password <input type="password" id="password" autocomplete="current-password" required></label>
     <button class="primary" type="submit">Sign in</button>
   </form>
+  <p id="google-sign-in" class="site-links" hidden><a class="button" id="google-start" href="/api/auth/google/start">Sign in with Google</a></p>
   <p id="sign-in-result" class="muted" role="status"></p>
 </main>
 <script src="/static/login.js"></script>

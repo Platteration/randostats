@@ -1,11 +1,13 @@
-"""The password gate, for a server that something other than its owner can reach.
+"""The gate, for a server that something other than its owner can reach.
 
-Bound to loopback with no password set, randostats asks for nothing: only this
-machine reaches the port, and the Host and cross-site checks in api.py keep a page
-in the browser from borrowing it. Bound anywhere else, ``randostats serve`` will not
-start without RANDOSTATS_PASSWORD; and whenever one is set, every request but the
-sign-in page and the files that are the same for every visitor has to carry a
-session cookie this process issued.
+Bound to loopback with no password and no sign-in with Google set up, randostats
+asks for nothing: only this machine reaches the port, and the Host and cross-site
+checks in api.py keep a page in the browser from borrowing it. Bound anywhere else,
+``randostats serve`` will not start without RANDOSTATS_PASSWORD or sign-in with
+Google (google.py); and whenever either is set up, every request but the sign-in
+page and the files that are the same for every visitor has to carry a session
+cookie this process issued. A Google sign-in opens the same kind of session as the
+password, remembering only the email Google said was verified, for "Signed in as".
 
 The shape is collectcollect's. The password is compared as two HMAC digests under a
 key drawn when the process starts, with ``hmac.compare_digest``, so neither the
@@ -111,17 +113,23 @@ def _client_bucket(client: str) -> str:
 
 
 class Gate:
-    """One password, the sessions it opened, and the count of guesses against it."""
+    """The password (if there is one), the sessions opened, and the count of guesses.
 
-    def __init__(self, password: str, clock=time.time):
-        problem = password_problem(password)
-        if problem:
-            raise ValueError(problem)
+    ``password`` is None when sign-in with Google is the only way in: then no
+    password matches, and the sessions are the ones Google sign-ins opened.
+    """
+
+    def __init__(self, password: str | None, clock=time.time):
+        if password is not None:
+            problem = password_problem(password)
+            if problem:
+                raise ValueError(problem)
         self._key = secrets.token_bytes(32)
-        self._password = self._digest(password)
+        self._password = None if password is None else self._digest(password)
         self._clock = clock
         self._lock = threading.Lock()
-        self._sessions: OrderedDict[str, float] = OrderedDict()
+        # id -> (when it ends, the Google account's {"email"?} or None for the password)
+        self._sessions: OrderedDict[str, tuple[float, dict | None]] = OrderedDict()
         self._attempts: dict[str, tuple[int, float]] = {}
         # (wrong guesses this window, when the window ends), across all buckets.
         self._total: tuple[int, float] = (0, 0.0)
@@ -129,8 +137,12 @@ class Gate:
     def _digest(self, value: str) -> bytes:
         return hmac.new(self._key, value.encode("utf-8", "surrogatepass"), hashlib.sha256).digest()
 
+    @property
+    def has_password(self) -> bool:
+        return self._password is not None
+
     def password_matches(self, submitted: object) -> bool:
-        if not isinstance(submitted, str):
+        if self._password is None or not isinstance(submitted, str):
             return False
         return hmac.compare_digest(self._digest(submitted), self._password)
 
@@ -150,25 +162,38 @@ class Gate:
             return None
         return sid
 
-    def issue(self) -> str:
-        """A new session, as the cookie value that carries it."""
+    def issue(self, account: dict | None = None) -> str:
+        """A new session, as the cookie value that carries it.
+
+        ``account`` is what a Google sign-in tells the page about who is signed in
+        (``{"email": ...}``, or ``{}`` when Google gave no verified address); a
+        password session has none.
+        """
         now = self._clock()
         with self._lock:
-            for sid in [s for s, expires in self._sessions.items() if expires <= now]:
+            for sid in [s for s, (expires, _) in self._sessions.items() if expires <= now]:
                 del self._sessions[sid]
             while len(self._sessions) >= MAX_SESSIONS:
                 self._sessions.popitem(last=False)
             sid = secrets.token_urlsafe(24)
-            self._sessions[sid] = now + SESSION_DAYS * 86400
+            self._sessions[sid] = (now + SESSION_DAYS * 86400, account)
         return f"{sid}.{self._signature(sid).decode('ascii')}"
 
-    def valid(self, token: object) -> bool:
+    def _session(self, token: object) -> tuple[float, dict | None] | None:
         sid = self._sid(token)
         if sid is None:
-            return False
+            return None
         with self._lock:
-            expires = self._sessions.get(sid)
-        return expires is not None and expires > self._clock()
+            session = self._sessions.get(sid)
+        return session if session is not None and session[0] > self._clock() else None
+
+    def valid(self, token: object) -> bool:
+        return self._session(token) is not None
+
+    def account(self, token: object) -> dict | None:
+        """Who a Google sign-in said this is, or None for a password session (or none)."""
+        session = self._session(token)
+        return None if session is None or session[1] is None else dict(session[1])
 
     def revoke(self, token: object) -> None:
         sid = self._sid(token)

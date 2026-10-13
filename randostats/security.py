@@ -75,6 +75,14 @@ def _authority(value: str):
     return allowed_hostname(parsed.hostname), parsed.port
 
 
+# The one API address a browser is sent to from another site: Google sends it back
+# to the sign-in callback (google.py) with a top-level GET from accounts.google.com,
+# which says Sec-Fetch-Site: cross-site. What stops another site from using it is
+# the callback's own check, not this one: it does nothing without the signed,
+# SameSite=Lax sign-in cookie, and then only for the state that cookie carries.
+CROSS_SITE_GET = frozenset({"/api/auth/google/callback"})
+
+
 def _first_party_only(scope) -> bool:
     """Whether only this server's own page may make this request.
 
@@ -84,7 +92,10 @@ def _first_party_only(scope) -> bool:
     with GET is: a link from another site to this one still opens it.
     """
     path = scope.get("path", "")
-    return path == "/api" or path.startswith("/api/") or scope.get("method", "GET") not in SAFE_METHODS
+    method = scope.get("method", "GET")
+    if method == "GET" and path in CROSS_SITE_GET:
+        return False
+    return path == "/api" or path.startswith("/api/") or method not in SAFE_METHODS
 
 
 # A body that stops arriving holds a staging file and an import slot, so it is not

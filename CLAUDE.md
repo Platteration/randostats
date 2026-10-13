@@ -144,19 +144,45 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   On `http.disconnect` it answers (a 400) rather than returning nothing, since the
   outer `BaseHTTPMiddleware` logs a traceback for an inner app that returns no
   response. One check, one place: do not add a second Host or cross-site check in
-  `api.py`.
-- **The gate.** `auth.py`. Loopback with no `RANDOSTATS_PASSWORD`: no login.
-  `serve` beyond loopback without one exits 2, so does a bind to every interface
-  with no `--allow-host`, and so does a loopback bind that serves a non-loopback
+  `api.py`. Its one exception is `CROSS_SITE_GET`: a GET of the Google sign-in
+  callback, which Google's redirect reaches as a cross-site navigation; the
+  callback's own state check is what guards it.
+- **The gate.** `auth.py`. Loopback with no `RANDOSTATS_PASSWORD` and no sign-in
+  with Google: no login. `serve` beyond loopback with neither exits 2, so does a
+  bind to every interface with no `--allow-host`, and so does a loopback bind that
+  serves a non-loopback
   `--allow-host` name (something forwards to it, so it is reachable from off the
   machine); `_beyond_loopback` refuses a connection on a non-loopback address when
   the app was started some other way. Guesses are counted per client, an IPv6 /64
   as one client (`_client_bucket`), with a global budget so a full table never
-  locks the owner out. With a password: `PUBLIC_PATHS` and `/static/` need no
+  locks the owner out. With either: `PUBLIC_PATHS` and `/static/` need no
   session, everything else does (pages 303 to `/login?next=`, the rest 401).
   `local_path` is all that stands between `next=` and an open redirect;
   `tests/test_auth.py` lists the payloads. The sign-in route is `async` so the
   guess count and the comparison run with no await between them.
+- **Sign in with Google.** `google.py`, the other way in, on when any of
+  `RANDOSTATS_GOOGLE_CLIENT_ID`, `_CLIENT_SECRET`, `_ALLOWED` is set; then all
+  three and `RANDOSTATS_APP_URL` (the site's root, https or http on localhost, a
+  name the server answers to) must hold, or `serve` and `create_app` refuse to
+  start: half set up is never a gate that opens for nobody, or none. The family's
+  kit (`server/kit/`) is JavaScript; this is a port of its Google part alone, in
+  the standard library: code flow with PKCE S256, state, nonce, verifier and the
+  return path in `__Host-randostats-oauth` (HMAC under a key drawn at start-up,
+  ten minutes, read by its exact name: Starlette's parser strips a raw 0xA0 or
+  0x85 off a cookie name, and Chromium sends one), the code redeemed at Google's
+  token endpoint (a constant) over the default SSL context with no redirect
+  followed. The ID token's signature is **not** checked, and that is OIDC Core
+  3.1.3.7 item 6, not a shortcut: the TLS validation of the token endpoint stands
+  in for it, which holds only for a token `redeem` fetched itself, so nothing may
+  ever take an ID token from anywhere else. Every claim is checked (`iss`, `aud`,
+  `azp`, `exp`, `iat` with a minute's skew, `nonce`, `sub`), the email only when
+  `email_verified` is `true`, and `RANDOSTATS_GOOGLE_ALLOWED` (subs or verified
+  emails) decides who; the log names a refused account by its sub. Each exchange
+  counts against the guess limit (`Gate.admit`), since anyone can get a fresh
+  sign-in cookie. It opens the same in-memory session as the password, holding the
+  email for "Signed in as". `/api/config` tells the sign-in page which ways in
+  there are; the tests reach Google through `create_app(fetch=...)` and
+  `tests/fake_google.py`, never an address of their own.
 - **Pages.** Every page with a script loads `/static/guard.js` first and has a
   `<noscript>` note; its own script ends with `window.RandoGuard.started()`, or
   the guard reports a failed start on every load. So nothing on the way there

@@ -947,6 +947,11 @@
       : "Nothing else here leaves your machine.";
     $("#status").textContent = st.messages ? `${fmt(st.messages)} messages · ${st.contacts} people` : "no messages imported";
     $("#sign-out").hidden = !st.auth;
+    // After a Google sign-in the server says who, as text: the address is Google's.
+    const who = st.user ? (st.user.email ? `Signed in as ${st.user.email}` : "Signed in with Google") : "";
+    $("#signed-in").textContent = who;
+    $("#signed-in").title = who;
+    $("#signed-in").hidden = !who;
     if (st.self_name) $("#self-name").value = st.self_name;
     const contacts = st.messages ? await api("/api/stats/contacts") : [];
     state.contacts = contacts;

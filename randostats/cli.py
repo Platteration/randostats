@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import parsers
+from . import google, parsers
 from .auth import password_problem
 from .store import DEFAULT_DB, Store
 from .security import LOCAL_HOSTS, allowed_hostname, loopback_bind
@@ -25,8 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("serve", help="run the web app")
     s.add_argument("--host", default="127.0.0.1",
                    help="interface to bind (default: %(default)s). Anything but loopback needs "
-                        "RANDOSTATS_PASSWORD (at least 12 characters) set in the environment: whoever "
-                        "reaches the port and has it can read, and delete, every message you have imported.")
+                        "RANDOSTATS_PASSWORD (at least 12 characters) or sign-in with Google "
+                        "(RANDOSTATS_GOOGLE_*) set in the environment: whoever reaches the port and can "
+                        "sign in can read, and delete, every message you have imported.")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--llm", action="store_true", help="let Claude phrase the rebuttals (needs an Anthropic credential)")
     s.add_argument("--allow-host", action="append", default=[], metavar="NAME",
@@ -76,6 +77,21 @@ def main(argv: list[str] | None = None) -> int:
         if problem:
             print(f"error: {problem}.", file=sys.stderr)
             return 2
+        # Sign-in with Google, the other way in (google.py). Set up halfway it is an
+        # error, never a gate that quietly opens for nobody or is not there at all.
+        try:
+            google_config = google.read_config(os.environ)
+        except ValueError as exc:
+            print(f"error: {exc}.", file=sys.stderr)
+            return 2
+        if google_config is not None and google_config.hostname not in hosts:
+            # Google sends the browser back to that name, and the Host check would
+            # refuse it: the sign-in could never finish.
+            print(f"error: {google.APP_URL} names {google_config.hostname}, which this server does not\n"
+                  f"       answer to, so Google's answer would be refused. Serve it with\n"
+                  f"       --allow-host {google_config.hostname}.", file=sys.stderr)
+            return 2
+        gated = password is not None or google_config is not None
         # "" is a bind-all, exactly as the line above says: uvicorn hands it
         # straight to bind(), and bind(("", port)) is every interface. Filing
         # it with the loopback names here let the widest bind of the three be
@@ -87,22 +103,23 @@ def main(argv: list[str] | None = None) -> int:
         # cannot see a proxy, so without a password that recipe served everything
         # unauthenticated (RS-R10). Refuse it here, where the served names are known.
         proxied = [name for name in names if not loopback_bind(allowed_hostname(name))]
-        if proxied and password is None and loopback_bind(args.host):
+        if proxied and not gated and loopback_bind(args.host):
             print(f"error: --allow-host {proxied[0]} is a name something forwards to this server, so it is\n"
-                  "       reachable from beyond this machine, and nothing would ask for a password: anyone\n"
-                  "       who reaches it could read, search and export every message you have imported, and\n"
-                  "       delete the lot. Set RANDOSTATS_PASSWORD (at least 12 characters) in the\n"
-                  "       environment, or serve only loopback names.", file=sys.stderr)
+                  "       reachable from beyond this machine, and nothing would ask anyone to sign in:\n"
+                  "       anyone who reaches it could read, search and export every message you have\n"
+                  "       imported, and delete the lot. Set RANDOSTATS_PASSWORD (at least 12 characters)\n"
+                  "       or sign-in with Google (README, \"Deploy\") in the environment, or serve only\n"
+                  "       loopback names.", file=sys.stderr)
             return 2
         if not loopback_bind(args.host):
-            if password is None:
+            if not gated:
                 # Everything imported, readable and deletable by whoever reaches the
                 # port: not something to start by accident, or with a warning.
                 print(f"error: serving on {args.host or '0.0.0.0'} reaches beyond this machine, and nothing\n"
-                      "       would ask for a password: anyone who can reach the port could read, search and\n"
-                      "       export every message you have imported, and delete the lot. Set\n"
-                      "       RANDOSTATS_PASSWORD (at least 12 characters) in the environment, or bind\n"
-                      "       127.0.0.1 (the default).", file=sys.stderr)
+                      "       would ask anyone to sign in: anyone who can reach the port could read, search\n"
+                      "       and export every message you have imported, and delete the lot. Set\n"
+                      "       RANDOSTATS_PASSWORD (at least 12 characters) or sign-in with Google (README,\n"
+                      "       \"Deploy\") in the environment, or bind 127.0.0.1 (the default).", file=sys.stderr)
                 return 2
             if not names:
                 # Every interface, and no name a browser elsewhere would use: the
@@ -114,9 +131,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             # Say what that still costs before it is served.
             print(f"warning: serving on {args.host or '0.0.0.0'}, which is not just this machine.\n"
-                  "         Anyone who can reach this port and has the password can read, search and\n"
-                  "         export every message you have imported, and delete the lot. Over plain HTTP\n"
-                  "         the password and the session cookie cross the network readable: put HTTPS\n"
+                  "         Anyone who can reach this port and sign in can read, search and export\n"
+                  "         every message you have imported, and delete the lot. Over plain HTTP the\n"
+                  "         password and the session cookie cross the network readable: put HTTPS\n"
                   "         in front (README, \"Deploy\").", file=sys.stderr)
             if args.llm:
                 # The warning above is about the data. --llm also hands out a
@@ -124,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("         With --llm, they can also make this server call the Anthropic API on your\n"
                       "         credential. RANDOSTATS_LLM_CALLS_PER_HOUR caps how much of that it will do.",
                       file=sys.stderr)
-        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts, password=password),
+        uvicorn.run(create_app(args.db, use_llm=args.llm, allowed_hosts=hosts, password=password,
+                               google_config=google_config),
                     host=args.host, port=args.port)
         return 0
 
