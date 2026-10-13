@@ -258,3 +258,71 @@ def test_the_spellers_memos_are_bounded(monkeypatch):
     assert speller.is_misspelled("definately") and not speller.is_misspelled("definitely")
     assert speller.suggest("definately") == "definitely"
     assert speller._suggestion.cache_info().maxsize == 16
+
+
+def _junk(rng, letters, speller):
+    """A lowercase word no dictionary word is one edit from, and that no noise
+    rule removes (no vowels, no letter that `_STRETCHED` repeats)."""
+    while True:
+        word = "".join(rng.choice("bcdfgjkpqrstvwx") for _ in range(letters))
+        if not stats._is_noise(word) and not speller.checker.known(speller.checker.edit_distance_1(word)):
+            return word
+
+
+def test_two_edit_suggestions_are_rationed(monkeypatch):
+    """The words in received messages are whatever the other side typed, and a
+    two-edit search builds every string two edits from the word: twenty seconds
+    for one of 45 letters. Thirty of those in someone's messages made "Everyone
+    else's" typos cost ten minutes. Now only FAR_SEARCHES words a view, each of
+    at most FAR_LETTERS letters, are searched that far."""
+    import random
+
+    speller = stats.Speller()
+    rng = random.Random(5)
+    long_ones = [_junk(rng, 45, speller) for _ in range(10)]
+    short_ones = [_junk(rng, 6, speller) for _ in range(6)]
+    t0 = datetime(2024, 3, 1, 9, 0)
+    texts = [w for w in long_ones for _ in range(5)] + [w for w in short_ones for _ in range(4)] + ["definately"] * 2
+    msgs = [msg("Alex", "received", t0 + timedelta(minutes=i), text) for i, text in enumerate(texts)]
+
+    searched = []
+    checker = type(speller.checker)  # slotted: the recorder goes on the class
+    real = checker.correction
+
+    def correction(self, word):
+        searched.append(word)
+        # A junk word reaches correction() only when it was granted the two-edit
+        # search; skip that search here so a regression fails fast, not slowly.
+        return real(self, word) if word == "definately" else None
+
+    monkeypatch.setattr(checker, "correction", correction)
+    result = stats.misspellings(msgs, speller, direction="received", limit=30)
+    assert {w["word"] for w in result["words"]} == {*long_ones, *short_ones, "definately"}
+    far = [w for w in searched if w != "definately"]
+    assert len(far) <= stats.FAR_SEARCHES, far
+    assert all(len(w) <= stats.FAR_LETTERS for w in far), far
+    assert far == short_ones[:stats.FAR_SEARCHES], "the most frequent short words get the search"
+    # A word one edit away still gets its suggestion, whatever the ration.
+    assert {w["word"]: w["suggestion"] for w in result["words"]}["definately"] == "definitely"
+
+
+def test_a_wall_of_long_junk_words_costs_seconds_not_minutes():
+    """End to end: three 45-letter strings from the other side cost a minute of
+    CPU in one misspellings view before the ration; a real typo two edits away
+    ("tommorow") keeps its suggestion."""
+    import random
+    import time
+
+    speller = stats.Speller()
+    rng = random.Random(9)
+    junk = [_junk(rng, 45, speller) for _ in range(3)]
+    t0 = datetime(2024, 3, 1, 9, 0)
+    texts = [w for w in junk for _ in range(20)] + ["see you tommorow"] * 3
+    msgs = [msg("Alex", "received", t0 + timedelta(minutes=i), text) for i, text in enumerate(texts)]
+    started = time.perf_counter()
+    result = stats.misspellings(msgs, speller, direction="received", limit=30)
+    took = time.perf_counter() - started
+    assert took < 5, f"{took:.1f}s"
+    suggestions = {w["word"]: w["suggestion"] for w in result["words"]}
+    assert suggestions["tommorow"] == "tomorrow"
+    assert all(suggestions[w] is None for w in junk)

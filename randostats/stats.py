@@ -275,6 +275,17 @@ def word_frequency(messages: list[Message], direction: str | None = None, limit:
 # per distinct word ever checked, never returned.
 MEMO_WORDS = 200_000
 
+# How much two-edit searching one misspellings view may do. A suggestion one
+# edit away costs milliseconds whatever the word; one two edits away costs
+# seconds, more the longer the word (Speller.suggest), and the words are
+# whatever the other side of the conversation typed. Unbounded, thirty distinct
+# 45-letter strings in someone's messages made "Everyone else's" typos take ten
+# minutes of CPU, twenty seconds a row. So every row gets the one-edit search,
+# and only the FAR_SEARCHES most frequent words with nothing one edit away, of
+# at most FAR_LETTERS letters, get the two-edit one: about four seconds at most.
+FAR_LETTERS = 12
+FAR_SEARCHES = 3
+
 
 class Speller:
     """Thin wrapper around pyspellchecker so the dictionary loads once."""
@@ -292,15 +303,27 @@ class Speller:
     def _check(self, lw: str) -> bool:
         return lw not in self.checker and lw.removesuffix("'s") not in self.checker
 
-    def _correct(self, lw: str) -> str | None:  # correction() is slow; it runs once per distinct word
+    def _correct(self, lw: str, far: bool) -> str | None:  # memoised per (word, far): see suggest()
+        if not far and not self.checker.known(self.checker.edit_distance_1(lw)):
+            return None  # nothing one edit away, and the two-edit search was not granted
+        # With a word one edit away, correction() stops there; only when there is
+        # none does it go on to the two-edit search.
         corr = self.checker.correction(lw)
         return corr if corr and corr != lw else None
 
     def is_misspelled(self, word: str) -> bool:
         return self._misspelled(word.lower().replace("’", "'"))
 
-    def suggest(self, word: str) -> str | None:
-        return self._suggestion(word.lower())
+    def suggest(self, word: str, far: bool = False) -> str | None:
+        """The likeliest dictionary word for ``word``, or None.
+
+        One edit away by default. ``far`` allows the two-edit search as well,
+        which builds every string two edits from the word: 0.25 s for a word of
+        four letters, 1.4 s for twelve and 20 s for forty-five, the longest
+        pyspellchecker will try. Words come out of other people's messages, so
+        ``misspellings`` grants it sparingly (FAR_LETTERS, FAR_SEARCHES).
+        """
+        return self._suggestion(word.lower(), far)
 
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -365,8 +388,14 @@ def misspellings(messages: list[Message], speller: Speller | None = None, direct
                     examples.setdefault(lw, m.text[:140])
                     by_contact[m.contact][lw] += 1
                     by_sender[m.sender][lw] += 1
-    top = counts.most_common(limit)
-    rows = [{"word": w, "count": c, "suggestion": speller.suggest(w), "example": examples[w]} for w, c in top]
+    rows = []
+    far_left = FAR_SEARCHES
+    for w, c in counts.most_common(limit):
+        suggestion = speller.suggest(w)
+        if suggestion is None and far_left and len(w) <= FAR_LETTERS:
+            far_left -= 1
+            suggestion = speller.suggest(w, far=True)
+        rows.append({"word": w, "count": c, "suggestion": suggestion, "example": examples[w]})
     total_bad = sum(counts.values())
     return {
         "direction": direction,

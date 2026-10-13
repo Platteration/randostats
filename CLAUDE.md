@@ -46,6 +46,14 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
   A zip member is read as `file_size` bytes, never `zf.read(name)` (which
   inflates the whole deflate stream first), so a member cannot cost more than
   its index declares. `tests/test_parsers.py` holds both.
+- **So is every word in it, and a spelling suggestion is a search.** Two edits
+  from a word is every string two edits away: 0.25 s for four letters, 20 s for
+  the 45 pyspellchecker still tries. Thirty such strings in someone's messages
+  made "Everyone else's" typos cost ten minutes. `misspellings` gives every row
+  the one-edit search (milliseconds) and the two-edit one only to the
+  `FAR_SEARCHES` most frequent words of at most `FAR_LETTERS` letters that have
+  nothing one edit away; `Speller.suggest` defaults to one edit.
+  `tests/test_stats.py` counts the searches and times the view.
 - **A request model defined inside `create_app` breaks FastAPI.** Pydantic
   models for request bodies must be at module scope, or the endpoint 422s on
   every call. This has happened twice (`CounterRequest`, `PackConfig`).
