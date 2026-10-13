@@ -87,9 +87,18 @@ def _first_party_only(scope) -> bool:
     return path == "/api" or path.startswith("/api/") or scope.get("method", "GET") not in SAFE_METHODS
 
 
+# A body that stops arriving holds a staging file and an import slot, so it is not
+# waited on for ever: `idle_timeout` seconds without a chunk, or `body_deadline`
+# seconds in all, and it is a 408. Parameters, so the tests can drive them small
+# against a receive that stalls rather than wait the real limits out (RS-R7).
+IDLE_TIMEOUT = 30.0
+BODY_DEADLINE = 300.0
+
+
 class RequestBoundary:
     def __init__(self, app, allowed_hosts=LOCAL_HOSTS, upload_limit=lambda: 256 * 1024 * 1024,
-                 max_uploads=2, overhead=MiB, screened=False):
+                 max_uploads=2, overhead=MiB, screened=False,
+                 idle_timeout=IDLE_TIMEOUT, body_deadline=BODY_DEADLINE):
         self.app = app
         self.hosts = frozenset(allowed_hostname(host) for host in allowed_hosts)
         self.upload_limit = upload_limit
@@ -98,6 +107,9 @@ class RequestBoundary:
         self.overhead = overhead
         # The headers were already screened, ahead of the password gate.
         self.screened = screened
+        # The longest a stalled or trickled body is staged before a 408.
+        self.idle_timeout = idle_timeout
+        self.body_deadline = body_deadline
         self.active_uploads = 0
 
     @staticmethod
@@ -187,17 +199,23 @@ class RequestBoundary:
             with tempfile.TemporaryFile() as body:
                 total = 0
                 more = True
-                deadline = asyncio.get_running_loop().time() + 300
+                deadline = asyncio.get_running_loop().time() + self.body_deadline
                 while more:
                     remaining = deadline - asyncio.get_running_loop().time()
                     if remaining <= 0:
                         return await self.reject(send, 408, "request body timed out")
                     try:
-                        message = await asyncio.wait_for(receive(), timeout=min(30, remaining))
+                        message = await asyncio.wait_for(receive(), timeout=min(self.idle_timeout, remaining))
                     except asyncio.TimeoutError:
                         return await self.reject(send, 408, "request body timed out")
                     if message["type"] == "http.disconnect":
-                        return
+                        # The client went away before the body arrived. api.py wraps
+                        # this in a BaseHTTPMiddleware, whose call_next raises
+                        # RuntimeError("No response returned.") - logged as a traceback
+                        # for every aborted upload - when the inner app returns without
+                        # a response (RS-R6). Answer instead: the bytes go nowhere, but
+                        # the middleware sees a response and logs nothing.
+                        return await self.reject(send, 400, "request body was cut off before it arrived")
                     chunk = message.get("body", b"")
                     total += len(chunk)
                     if total > limit:

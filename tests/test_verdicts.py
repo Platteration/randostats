@@ -178,6 +178,54 @@ def test_every_topic_names_real_percentage_facts():
             assert every[fact_id]["kind"] == "percent", fact_id
 
 
+# What a long clause made of one repeated word costs every topic: the claim
+# shapes (a percentage, "1 in N") and the head words of the topics that need a
+# second word after or beside the first.
+HOSTILE_UNITS = ["1% ", "1 in ", "sleep ", "read ", "credit card ", "colour blind ", "earth ", "$400 ", "body "]
+
+
+def test_a_topic_needing_two_words_is_tried_from_the_start_alone():
+    """A `.*` that search() may retry from every offset is a pass over the
+    clause per offset (RS-R3). The ones a topic needs are anchored at `\\A`."""
+    for pattern, ids in _TOPICS:
+        if ".*" in pattern:
+            assert pattern.startswith("(?s)\\A"), f"{ids}: {pattern!r} is retried from every offset"
+
+
+@pytest.mark.parametrize("unit", HOSTILE_UNITS)
+def test_every_topic_costs_one_pass_over_a_long_clause(unit):
+    """Each claim's clause is checked against every topic, and the clause can be
+    the whole 4,000 characters the API accepts. The five `(?=.*x)(?=.*y)` topics
+    took 0.2 s each on such a clause, and the three `x.*y` ones 10 to 20 ms; one
+    pass is a fraction of a millisecond. Measured per pattern, so a new topic
+    that is quadratic fails here by name."""
+    import time
+
+    from randostats.counterpoint.engine import _TOPIC_PATTERNS
+
+    clause = (unit * 4000)[:4000]
+    for pattern, ids in _TOPIC_PATTERNS:
+        def once() -> float:
+            start = time.perf_counter()
+            pattern.search(clause)
+            return time.perf_counter() - start
+        cost = min(once() for _ in range(3))  # the one the machine was not busy for
+        assert cost < 0.003, f"{ids} took {cost * 1000:.1f} ms on {unit!r} repeated"
+
+
+@pytest.mark.parametrize("unit", ["1% ", "1 in "])
+def test_a_wall_of_claims_is_answered_promptly(client, unit):
+    """Twenty claims, each with the whole 4,000 characters as its clause, took
+    16 to 18 s, with the GIL held the whole time, so every other request waited
+    as well. Now it is a fifth of a second."""
+    import time
+
+    start = time.perf_counter()
+    response = client.post("/api/counterpoint", json={"text": (unit * 4000)[:4000]})
+    assert response.status_code == 200
+    assert time.perf_counter() - start < 2.0
+
+
 # ---------------------------------------------------------------------- myths
 
 MYTHS = packs.load_myths()

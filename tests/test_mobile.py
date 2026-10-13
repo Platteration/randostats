@@ -7,6 +7,7 @@ service worker's promise never to cache an answer or a setting.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -62,6 +63,37 @@ def test_the_service_worker_is_served_from_the_root(client):
     r = client.get("/sw.js")
     assert r.status_code == 200
     assert "javascript" in r.headers["content-type"]
+
+
+def _shell_file(path: str) -> Path:
+    """The file a SHELL path is served from."""
+    if path == "/m":
+        return STATIC / "m.html"
+    if path == "/manifest.webmanifest":
+        return STATIC / "m.webmanifest"
+    assert path.startswith("/static/"), path
+    return STATIC / path[len("/static/"):]
+
+
+def _shell_hash() -> str:
+    source = (STATIC / "m-sw.js").read_text()
+    shell = re.findall(r'"(/[^"]*)"', re.search(r"const SHELL = \[(.*?)\]", source, re.S).group(1))
+    digest = hashlib.sha256()
+    for path in shell:
+        digest.update(path.encode() + b"\0")
+        digest.update(_shell_file(path).read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def test_the_cache_name_tracks_the_shell_contents():
+    """A cache-first worker only refetches the shell when its cache name changes.
+    A hand-bumped name went stale when m.js changed but the name did not, so the
+    fix never reached a phone that had installed the app (RS-R5). The name is a
+    hash of the shell files' bytes; paste the printed value in when it drifts."""
+    source = (STATIC / "m-sw.js").read_text()
+    name = re.search(r'const CACHE = "([^"]*)"', source).group(1)
+    want = f"counterpoint-shell-{_shell_hash()}"
+    assert name == want, f"m-sw.js CACHE is stale; installed phones keep the old shell. Set it to {want!r}."
 
 
 def test_the_service_worker_never_caches_the_api():

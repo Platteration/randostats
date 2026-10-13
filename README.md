@@ -273,13 +273,13 @@ permission bits do not set the ACLs.
 256 by default) plus 8 KiB for the form around the file, and any other request
 1 MB. A declared `Content-Length` past that is refused before anything is read,
 and a body that declares none is counted as it arrives and stopped at the same
-limit (413); a `Content-Length` that is malformed, or that the body does not
-match, is a 400. The body is staged in a private temporary file before the form
-parser sees it, receiving it times out after 30 seconds without data or five
-minutes in all (408), and at most two imports run at once (a third is a 503).
-Those two are per server process, so more workers multiply them. With a
-password set, a request without a session is answered before its body is read,
-so it holds neither disk nor an import.
+limit (413); a malformed `Content-Length` is a 400. The body is staged in a
+private temporary file before the form parser sees it, receiving it times out
+after 30 seconds without data or five minutes in all (408), and a body cut off
+mid-stream is a 400; at most two imports run at once (a third is a 503). Those
+two are per server process, so more workers multiply them. With a password set,
+a request without a session is answered before its body is read, so it holds
+neither disk nor an import.
 
 ### Deploy
 
@@ -301,11 +301,16 @@ password set, every page sends you to `/login` first, and the session then lasts
 the header ends that session wherever a copy of the cookie went; restarting the
 server ends them all, and is the way to change the password. The password is
 compared as two fixed-length HMAC digests in constant time. After eight wrong
-guesses in a minute a client waits the minute out; the client is the address
-that connected, or behind a reverse proxy on this machine the address the proxy
-writes in `X-Forwarded-For` (uvicorn believes that header only from 127.0.0.1 and
-::1, or the addresses in `FORWARDED_ALLOW_IPS`), so set it there rather than let
-the client's own value through. What is the same for every visitor (`/static/`,
+guesses in a minute a client waits the minute out, and a flood spread thin
+across many clients waits once the server has counted a thousand wrong guesses
+in the minute; a brand-new client is never turned away before its first guess,
+so a full table cannot lock the owner out. A "client" is the connecting address,
+with a whole IPv6 /64 counted as one (it is one subscriber's allocation, so
+per-/128 counting gave a guesser 2^64 budgets from one line); behind a reverse
+proxy on this machine it is the address the proxy writes in `X-Forwarded-For`
+(uvicorn believes that header only from 127.0.0.1 and ::1, or the addresses in
+`FORWARDED_ALLOW_IPS`), so set it there rather than let the client's own value
+through. What is the same for every visitor (`/static/`,
 the manifest, the service worker, `robots.txt`, `security.txt`) is served
 without a session; the two pages, the sample and the API are not. Run with
 `uvicorn --factory randostats.api:create_app` instead, the app reads
@@ -419,11 +424,11 @@ has passed.
 **Launch checklist**, with `SITE` your HTTPS name:
 
 ```sh
-curl -sI http://SITE/ | head -1                  # a 301 to https (the proxy)
+curl -sI http://SITE/ | head -1                               # a 301 to https (the proxy)
 curl -sI https://SITE/robots.txt | grep -i -E 'content-security|strict-transport|nosniff|referrer|permissions|cache-control'
-curl -sI https://SITE/ | head -1                 # a 303 to /login
-curl -s  https://SITE/api/status                 # {"detail":"sign in first"}
-curl -sI https://SITE/.git/config | head -1      # a 404
+curl -sI -H 'Accept: text/html' https://SITE/ | head -1       # a 303 to /login (only a page that asks for HTML is redirected; curl's */* is a 401)
+curl -s  https://SITE/api/status                              # {"detail":"sign in first"}
+curl -sI https://SITE/.git/config | head -1                   # a 401: refused by the gate before routing, so not served
 ```
 
 Then sign in, load the sample, open every tab and the phone page, and check

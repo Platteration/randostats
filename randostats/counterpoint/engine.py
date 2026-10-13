@@ -313,10 +313,37 @@ def extract_claims(text: str, limit: int = MAX_CLAIMS) -> list[Claim]:
 # measure the same thing the words describe. Where framing differs ("have a
 # credit card" vs "credit card interest"), the narrower pattern comes first.
 # Patterns are matched against the claim's whole clause, lower-cased.
+#
+# That clause is up to MAX_TEXT_CHARS long, and each of up to MAX_CLAIMS claims
+# is checked against every topic, so a pattern that costs more than one pass over
+# the clause is paid for twenty times over. A bare `(?=.*x)` costs a pass from
+# every offset search() retries it at: written that way, five topics made 4,000
+# characters cost 18 s of a held GIL (RS-R3). `_both` and `_then` spell the two
+# shapes that need a `.*` so that they are tried from the start of the clause
+# alone. The clause has its whitespace collapsed, so it holds no newline for
+# `(?s)` to change the meaning of.
+
+
+def _both(first: str, second: str) -> str:
+    """``first`` and ``second`` both somewhere in the clause, in either order."""
+    return rf"(?s)\A(?=.*{first})(?=.*{second})"
+
+
+def _then(first: str, second: str) -> str:
+    """``second`` somewhere after ``first``.
+
+    The prefix steps over characters where ``first`` does not start, so the one
+    ``first`` the pattern goes on from is the earliest, which leaves the most
+    clause for ``second``. Unanchored, search() tried every later ``first`` too,
+    each with a pass to the end of the clause.
+    """
+    return rf"(?s)\A(?:(?!{first}).)*{first}.*{second}"
+
+
 _TOPICS: list[tuple[str, list[str]]] = [
     (r"\b(?:clean|safe) (?:drinking )?water\b", ["no-safe-water"]),
-    (r"(?=.*\b(?:earth|planet|globe|surface)\b)(?=.*\b(?:water|oceans?|seas?)\b)", ["earth-water"]),
-    (r"(?=.*\bbod(?:y|ies)\b)(?=.*\bwater\b)", ["body-water"]),
+    (_both(r"\b(?:earth|planet|globe|surface)\b", r"\b(?:water|oceans?|seas?)\b"), ["earth-water"]),
+    (_both(r"\bbod(?:y|ies)\b", r"\bwater\b"), ["body-water"]),
     (r"\bfresh ?water\b", ["fresh-water"]),
     (r"\b(?:beer|wine|alcohol|booze|liquor|spirits)\b|\bdrinks? alcohol", ["alcohol-us"]),
     (r"\bbinge", ["binge-us"]),
@@ -333,7 +360,7 @@ _TOPICS: list[tuple[str, list[str]]] = [
     (r"\bdiabet", ["diabetes-us"]),
     (r"\bmental(?:ly)? ill", ["mental-us"]),
     (r"\bchronic pain\b", ["chronic-pain-us"]),
-    (r"\bsleep\w*\b.*\b(?:less than|under|fewer than)\b", ["sleep-us"]),
+    (_then(r"\bsleep\w*\b", r"\b(?:less than|under|fewer than)\b"), ["sleep-us"]),
     (r"\b(?:smok\w*|cigarettes?)\b", ["smoke-us"]),
     (r"\btattoo", ["tattoo-us"]),
     (r"\b(?:wear|need|have)\s+(?:eye)?glasses\b", ["glasses-us"]),
@@ -348,12 +375,12 @@ _TOPICS: list[tuple[str, list[str]]] = [
     (r"\byoutube\b", ["youtube-us"]),
     (r"\bmarried\b", ["married-us"]),
     (r"\bchristians?\b", ["christian-us"]),
-    (r"\bread\w*\b.*\bbooks?\b", ["book-us", "no-book-us"]),
+    (_then(r"\bread\w*\b", r"\bbooks?\b"), ["book-us", "no-book-us"]),
     (r"\bpassports?\b", ["passport-us"]),
     (r"\bleft[\s-]?hand\w*|\blefties\b", ["left-handed"]),
     (r"\bright[\s-]?hand\w*", ["right-handed"]),
-    (r"(?=.*\bcolou?r[\s-]?blind)(?=.*\bwomen\b)", ["colorblind-women"]),
-    (r"(?=.*\bcolou?r[\s-]?blind)(?=.*\bmen\b)", ["colorblind-men"]),
+    (_both(r"\bcolou?r[\s-]?blind", r"\bwomen\b"), ["colorblind-women"]),
+    (_both(r"\bcolou?r[\s-]?blind", r"\bmen\b"), ["colorblind-men"]),
     (r"\b(?:red hair|redheads?|gingers?)\b", ["red-hair"]),
     (r"\btwins\b", ["twins"]),
     (r"\bautis", ["autism"]),
@@ -370,8 +397,8 @@ _TOPICS: list[tuple[str, list[str]]] = [
     (r"\bchimp", ["dna-chimp"]),
     (r"\bdark matter\b", ["dark-matter"]),
     (r"\bdark energy\b", ["dark-energy"]),
-    (r"(?=.*\$?\b400\b)(?=.*\bemergenc)", ["mn-400"]),
-    (r"\bcredit cards?\b.*\b(?:interest|apr|rate)\b", ["mn-apr"]),
+    (_both(r"\$?\b400\b", r"\bemergenc"), ["mn-400"]),
+    (_then(r"\bcredit cards?\b", r"\b(?:interest|apr|rate)\b"), ["mn-apr"]),
     (r"\b(?:have|has|own|use)\s+(?:a\s+)?credit cards?\b", ["mn-card"]),
     (r"\bretirement sav", ["mn-retirement"]),
     (r"\bfree throws?\b", ["sp-ft"]),

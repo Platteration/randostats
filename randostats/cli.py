@@ -80,6 +80,20 @@ def main(argv: list[str] | None = None) -> int:
         # straight to bind(), and bind(("", port)) is every interface. Filing
         # it with the loopback names here let the widest bind of the three be
         # the one that said nothing.
+        # A name other than loopback is one something forwards to this server - a
+        # reverse proxy, a tunnel, a container port map - so the server is reached
+        # from beyond this machine even when it binds 127.0.0.1 (`--allow-host
+        # stats.example.com`, the README's own recipe). `_beyond_loopback` in the app
+        # cannot see a proxy, so without a password that recipe served everything
+        # unauthenticated (RS-R10). Refuse it here, where the served names are known.
+        proxied = [name for name in names if not loopback_bind(allowed_hostname(name))]
+        if proxied and password is None and loopback_bind(args.host):
+            print(f"error: --allow-host {proxied[0]} is a name something forwards to this server, so it is\n"
+                  "       reachable from beyond this machine, and nothing would ask for a password: anyone\n"
+                  "       who reaches it could read, search and export every message you have imported, and\n"
+                  "       delete the lot. Set RANDOSTATS_PASSWORD (at least 12 characters) in the\n"
+                  "       environment, or serve only loopback names.", file=sys.stderr)
+            return 2
         if not loopback_bind(args.host):
             if password is None:
                 # Everything imported, readable and deletable by whoever reaches the

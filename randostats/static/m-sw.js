@@ -7,7 +7,12 @@
  * are switched on in the database, so a cached copy would have the phone
  * insisting on a fact count the desktop just changed.
  */
-const CACHE = "counterpoint-shell-v2";
+// The cache name is a hash of the SHELL files' contents, not a number bumped by
+// hand: a cache-first worker only refetches the shell when the name changes, and
+// a hand-written one went stale when m.js changed but it did not (RS-R5), so the
+// fix never reached a phone that had already installed the app. tests/test_mobile.py
+// recomputes this and prints the value to paste in when a shell file changes.
+const CACHE = "counterpoint-shell-f593fbb08aba";
 // guard.js too: /m loads it first, and offline a file this cache does not hold is
 // simply missing, so the page would open with no safety net and nothing to say so.
 const SHELL = ["/m", "/static/guard.js", "/static/m.css", "/static/m.js", "/manifest.webmanifest", "/static/icon-192.png"];

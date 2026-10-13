@@ -164,7 +164,24 @@ def json_files(data: bytes, suffix: str = ".json", contains: str = "") -> Iterat
                 continue
             if info.file_size > MAX_MEMBER_BYTES:
                 raise ArchiveTooLarge(f"{name} unpacks to {info.file_size // (1024 * 1024)} MB, which is too large")
+            # The caps so far are on the *declared* sizes. zf.read(name) believes
+            # none of them: read() with no length loops the decompressor with a
+            # one-gigabyte max_length, so it inflates the whole deflate stream
+            # at once - 900 MiB from a member declaring 100 bytes - before the
+            # file_size cap trims the result (RS-R2). Reading file_size bounds
+            # that max_length to the declared size, so no member inflates past
+            # what its own index claims (and the index total is already capped
+            # above). A deflate stream that then does not match its declared
+            # size trips the reader's own CRC check at the boundary; a member
+            # that lies about its size, or a corrupt one, is refused with a
+            # clear message rather than a bare traceback.
+            with zf.open(info) as member:
+                try:
+                    raw = member.read(info.file_size)
+                except zipfile.BadZipFile as exc:
+                    raise ArchiveTooLarge(
+                        f"{name} does not unpack to the {info.file_size} bytes its index declares") from exc
             try:
-                yield name, json.loads(zf.read(name).decode("utf-8", errors="replace"))
-            except (json.JSONDecodeError, KeyError):
+                yield name, json.loads(raw.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
                 continue

@@ -647,6 +647,37 @@ def test_a_compressed_bomb_is_refused_before_it_is_read(monkeypatch):
         list(archive.json_files(bomb))
 
 
+def test_an_aborted_upload_is_answered_not_logged_as_a_server_error(tmp_path):
+    """A client that disconnects mid-body used to make the BaseHTTPMiddleware guard's
+    call_next raise RuntimeError("No response returned.") and log a traceback for
+    every aborted upload (RS-R6). The boundary answers the disconnect, so the app
+    returns a response and nothing is logged."""
+    import asyncio
+
+    app = create_app(tmp_path / "abort.db", use_llm=False)
+    scope = {"type": "http", "method": "POST", "path": "/api/import", "scheme": "http",
+             "query_string": b"", "client": ("127.0.0.1", 5000), "server": ("127.0.0.1", 8765),
+             "headers": [(b"host", b"localhost"), (b"content-type", b"multipart/form-data; boundary=x"),
+                         (b"content-length", b"100000")]}
+    incoming = [{"type": "http.request", "body": b"--x\r\n", "more_body": True}, {"type": "http.disconnect"}]
+
+    async def receive():
+        return incoming.pop(0) if incoming else {"type": "http.disconnect"}
+
+    sent: list = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def drive():
+        await app(scope, receive, send)
+
+    # The bug surfaced as the coroutine raising RuntimeError out of the middleware.
+    asyncio.run(drive())
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert starts and starts[0]["status"] == 400, "the disconnect was answered, not left unhandled"
+
+
 def test_import_reports_an_oversized_archive_as_413(client, monkeypatch):
     monkeypatch.setattr(archive, "MAX_TOTAL_BYTES", 64)
     data = _zip({"messages/inbox/a/message_1.json": json.dumps(
@@ -972,9 +1003,14 @@ def test_the_cli_only_serves_loopback_unless_told_otherwise(tmp_path, monkeypatc
     with TestClient(served["app"], base_url="http://stats.lan") as c:
         assert c.get("/api/status").status_code == 403
 
+    # A forwarded name is served only with a password now: without one the CLI
+    # refuses to start, since the server is reachable from beyond this machine
+    # (RS-R10). The name is then served, behind the gate.
+    assert cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--allow-host", "stats.lan"]) == 2
+    monkeypatch.setenv("RANDOSTATS_PASSWORD", "correct horse battery")
     cli.main(["--db", str(tmp_path / "cli.db"), "serve", "--allow-host", "stats.lan"])
     with TestClient(served["app"], base_url="http://stats.lan") as c:
-        assert c.get("/api/status").status_code == 200
+        assert c.get("/api/status").status_code == 401
 
 
 def test_a_body_larger_than_the_cap_is_refused_before_it_is_parsed(client, monkeypatch):

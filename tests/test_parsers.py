@@ -388,3 +388,161 @@ def test_telegram_reads_an_archive_one_document_at_a_time():
     seen = list(telegram._payloads(buf.getvalue()))
     assert len(seen) == 3 and all(isinstance(d, dict) for d in seen)
     assert inspect.isgenerator(telegram._payloads(buf.getvalue()))
+
+
+# -------------------------------------------------------------- iMessage chat.db
+
+import os as _os
+import sqlite3 as _sqlite3
+import struct as _struct
+import subprocess as _subprocess
+import sys as _sys
+import tempfile as _tempfile
+
+from randostats.parsers import archive as _archive
+from randostats.parsers import imessage
+
+# A plain Messages chat.db: the four tables imessage reads, with one message
+# each way. `date` is Apple nanoseconds (2001 epoch).
+_CHAT_DB_SCHEMA = """
+CREATE TABLE message(ROWID INTEGER PRIMARY KEY, date INTEGER, is_from_me INT, text TEXT,
+                     attributedBody BLOB, handle_id INT);
+CREATE TABLE handle(ROWID INTEGER PRIMARY KEY, id TEXT);
+CREATE TABLE chat(ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT);
+CREATE TABLE chat_message_join(chat_id INTEGER, message_id INTEGER);
+"""
+
+
+def _write_db(script, rows=()):
+    """Build a SQLite file from `script` plus `rows` ((sql, params) pairs) and
+    return its bytes. A fresh temp file each time, removed before returning."""
+    fd, path = _tempfile.mkstemp(suffix=".db")
+    _os.close(fd)
+    try:
+        conn = _sqlite3.connect(path)
+        conn.executescript(script)
+        for sql, params in rows:
+            conn.executemany(sql, params)
+        conn.commit()
+        conn.close()
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        _os.unlink(path)
+
+
+def test_a_plain_chat_db_round_trips():
+    data = _write_db(_CHAT_DB_SCHEMA + """
+        INSERT INTO handle VALUES(1, '+15551234567');
+        INSERT INTO chat VALUES(1, '+15551234567', 'Alex');
+        INSERT INTO chat_message_join VALUES(1, 1);
+        INSERT INTO chat_message_join VALUES(1, 2);
+        INSERT INTO message VALUES(1, 694252800000000000, 0, 'hi there', NULL, 1);
+        INSERT INTO message VALUES(2, 694252860000000000, 1, 'hello back', NULL, 1);
+    """)
+    assert parsers.detect_format("chat.db", data) == "imessage"
+    msgs = list(imessage.parse(data, "Me"))
+    assert [m.direction for m in msgs] == ["received", "sent"]
+    assert [m.text for m in msgs] == ["hi there", "hello back"]
+    assert {m.contact for m in msgs} == {"Alex"}
+    assert msgs[1].sender == "Me"
+
+
+def test_a_message_view_is_refused_at_once():
+    """Read-only mode stops writes, not a VIEW the file defines: a recursive
+    `message` view makes the ORDER BY sort an endless stream and fill the disk
+    with temp files (RS-R1). It must be refused before the query runs, not
+    after a timeout."""
+    data = _write_db(_CHAT_DB_SCHEMA.replace(
+        "CREATE TABLE message(ROWID INTEGER PRIMARY KEY, date INTEGER, is_from_me INT, text TEXT,\n"
+        "                     attributedBody BLOB, handle_id INT);",
+        "CREATE VIEW message AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n) "
+        "SELECT x AS ROWID, -x AS date, 0 AS is_from_me, 'x' AS text, NULL AS attributedBody, 0 AS handle_id FROM n;"))
+    start = time.perf_counter()
+    with pytest.raises(imessage.UnexpectedSchema, match="view"):
+        list(imessage.parse(data, "Me"))
+    assert time.perf_counter() - start < 2.0, "the view was run, not refused up front"
+
+
+def test_a_generated_column_in_message_is_refused():
+    """A generated column carries a per-row expression; a plain chat.db has
+    none, so one marks a crafted file."""
+    data = _write_db(_CHAT_DB_SCHEMA.replace(
+        "attributedBody BLOB, handle_id INT);",
+        "attributedBody BLOB, handle_id INT, extra INT GENERATED ALWAYS AS (date * 2) VIRTUAL);"))
+    with pytest.raises(imessage.UnexpectedSchema, match="generated column"):
+        list(imessage.parse(data, "Me"))
+
+
+def test_a_fanned_out_join_is_cut_off(monkeypatch):
+    """Even with plain tables, a chat_message_join that crosses every message
+    with every chat multiplies the rows the ORDER BY must sort, so a file
+    within the upload cap can run the sort for minutes and spill gigabytes of
+    temp. A wall-clock budget interrupts it. With the budget removed the parse
+    would instead run to completion and return messages."""
+    monkeypatch.setattr(imessage, "_QUERY_BUDGET_SECONDS", 0.1)
+    n = 550  # n*n = 302,500 joined rows: ~1s of sort, well past a 0.1s budget
+    data = _write_db(
+        _CHAT_DB_SCHEMA,
+        [("INSERT INTO message VALUES(?, ?, 0, 'hi', NULL, NULL)", [(i, i) for i in range(1, n + 1)]),
+         ("INSERT INTO chat_message_join VALUES(?, ?)", [(a, b) for a in range(1, n + 1) for b in range(1, n + 1)])])
+    start = time.perf_counter()
+    with pytest.raises(imessage.UnexpectedSchema, match="too long"):
+        list(imessage.parse(data, "Me"))
+    assert time.perf_counter() - start < 5.0
+
+
+def _size_lying_zip(real_bytes, declared):
+    """A one-member zip (result.json) whose central directory and local header
+    declare `declared` uncompressed bytes while the deflate stream holds
+    `real_bytes`."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("result.json", real_bytes)
+    raw = bytearray(buf.getvalue())
+    want = _struct.pack("<I", declared)
+    i = raw.find(b"PK\x03\x04")
+    raw[i + 22:i + 26] = want  # local file header uncompressed-size field
+    j = raw.find(b"PK\x01\x02")
+    raw[j + 24:j + 28] = want  # central directory uncompressed-size field
+    return bytes(raw)
+
+
+def test_a_zip_member_is_not_inflated_past_its_declared_size():
+    """json_files checked declared sizes, then called zf.read(name), which
+    inflated the whole deflate stream before trimming it to the declared size:
+    a member declaring 100 bytes but holding 256 MiB cost the 256 MiB in memory
+    (RS-R2). It is refused now, and the peak RSS of doing so, measured in a
+    subprocess, stays far below the uncompressed size."""
+    zip_bytes = _size_lying_zip(b" " * (256 * 1024 * 1024), 100)
+    # Comfortably under the real content so an honest 256 KiB zip stays small.
+    assert len(zip_bytes) < 1024 * 1024
+    with pytest.raises(_archive.ArchiveTooLarge, match="declares"):
+        list(_archive.json_files(zip_bytes, contains="result.json"))
+
+    # The refusal itself must not pay the memory: run it in a subprocess and
+    # read peak RSS (VmHWM) before and after.
+    program = (
+        "import sys, resource\n"
+        "from randostats.parsers import archive\n"
+        "data = sys.stdin.buffer.read()\n"
+        "before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "try:\n"
+        "    list(archive.json_files(data, contains='result.json'))\n"
+        "except archive.ArchiveTooLarge:\n"
+        "    pass\n"
+        "after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "print((after - before) // 1024)\n")  # peak RSS growth in MiB
+    out = _subprocess.run([_sys.executable, "-c", program], input=zip_bytes,
+                          capture_output=True, check=True)
+    grew_mib = int(out.stdout.strip())
+    assert grew_mib < 128, f"refusing the bomb grew RSS by {grew_mib} MiB; the member was inflated"
+
+
+def test_honest_zip_members_still_parse():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("DataExport/result.json", _json.dumps({"ok": 1, "body": "x" * 20000}))
+        zf.writestr("DataExport/empty.json", "")
+    out = dict(_archive.json_files(buf.getvalue(), contains="result.json"))
+    assert out == {"DataExport/result.json": {"ok": 1, "body": "x" * 20000}}

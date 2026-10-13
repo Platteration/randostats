@@ -37,6 +37,15 @@ over `list[Message]`. `store.py` is SQLite. `api.py` wires them to HTTP.
   regression; do not weaken it. Nothing writes a `style=""` attribute either:
   the policy refuses inline styles, so a chart sets its declarations through
   the CSSOM (`el()` does it for a `style` key) or a class (`dot()`'s `hueN`).
+- **An import file is other people's data, and so is what it points at.** An
+  uploaded `chat.db` is opened read-only, but read-only stops writes, not the
+  work a VIEW the file defines can do: `imessage.parse` requires `message`,
+  `handle`, `chat` and `chat_message_join` to be plain tables (no views, no
+  generated columns) before its query, and runs the query under a wall-clock
+  budget, so neither a recursive view nor a fanned-out join can fill the disk.
+  A zip member is read as `file_size` bytes, never `zf.read(name)` (which
+  inflates the whole deflate stream first), so a member cannot cost more than
+  its index declares. `tests/test_parsers.py` holds both.
 - **A request model defined inside `create_app` breaks FastAPI.** Pydantic
   models for request bodies must be at module scope, or the endpoint 422s on
   every call. This has happened twice (`CounterRequest`, `PackConfig`).
@@ -88,9 +97,12 @@ from `app.js`, which is one closed IIFE. Consequences worth knowing:
 - The service worker is served from `/sw.js`, not `/static/`, because scope
   defaults to the script's own directory. It must never cache `/api/` —
   `counterpoint/packs` reflects database state. Its `SHELL` holds every script
-  and stylesheet `m.html` loads, `guard.js` included (`tests/test_website.py`),
-  and `CACHE` changes name whenever `SHELL` does, or installed phones keep the
-  old list.
+  and stylesheet `m.html` loads, `guard.js` included (`tests/test_website.py`).
+  `CACHE` is a hash of the shell files' *contents*, not a hand-bumped number: a
+  cache-first worker only refetches the shell when the name changes, and a
+  hand-bumped one went stale when `m.js` changed but the name did not, so the fix
+  never reached an installed phone. `tests/test_mobile.py` recomputes the hash and
+  prints the value to paste in when a shell file changes.
 - `navigator.share` must be called with no `await` in front of it, so the share
   PNG is rendered when the card is shown. There is a test for that.
 - Icons are committed PNGs; regenerate with `python samples/make_icons.py`.
@@ -118,19 +130,25 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   scheme, name and port and a `Sec-Fetch-Site` of `same-origin` or `none` on the
   API and on every unsafe method; the declared length) and runs first in
   `security_guard`, so its refusal carries the policy like any other answer.
-  Admission (the streamed cap, the timeouts, two imports at once, the private
-  staging file) is the same class added with `screened=True`, inside the guard,
-  so a client without a session stages nothing. One check, one place: do not
-  add a second Host or cross-site check in `api.py`.
+  Admission (the streamed cap, the `idle_timeout`/`body_deadline` timeouts, two
+  imports at once, the private staging file) is the same class added with
+  `screened=True`, inside the guard, so a client without a session stages nothing.
+  On `http.disconnect` it answers (a 400) rather than returning nothing, since the
+  outer `BaseHTTPMiddleware` logs a traceback for an inner app that returns no
+  response. One check, one place: do not add a second Host or cross-site check in
+  `api.py`.
 - **The gate.** `auth.py`. Loopback with no `RANDOSTATS_PASSWORD`: no login.
-  `serve` beyond loopback without one exits 2, and so does a bind to every
-  interface with no `--allow-host`; `_beyond_loopback` refuses a
-  connection on a non-loopback address when the app was started some other way.
-  With one: `PUBLIC_PATHS` and `/static/` need no session, everything else does
-  (pages 303 to `/login?next=`, the rest 401). `local_path` is all that stands
-  between `next=` and an open redirect; `tests/test_auth.py` lists the payloads.
-  The sign-in route is `async` so the guess count and the comparison run with no
-  await between them.
+  `serve` beyond loopback without one exits 2, so does a bind to every interface
+  with no `--allow-host`, and so does a loopback bind that serves a non-loopback
+  `--allow-host` name (something forwards to it, so it is reachable from off the
+  machine); `_beyond_loopback` refuses a connection on a non-loopback address when
+  the app was started some other way. Guesses are counted per client, an IPv6 /64
+  as one client (`_client_bucket`), with a global budget so a full table never
+  locks the owner out. With a password: `PUBLIC_PATHS` and `/static/` need no
+  session, everything else does (pages 303 to `/login?next=`, the rest 401).
+  `local_path` is all that stands between `next=` and an open redirect;
+  `tests/test_auth.py` lists the payloads. The sign-in route is `async` so the
+  guess count and the comparison run with no await between them.
 - **Pages.** Every page with a script loads `/static/guard.js` first and has a
   `<noscript>` note; its own script ends with `window.RandoGuard.started()`, or
   the guard reports a failed start on every load. So nothing on the way there

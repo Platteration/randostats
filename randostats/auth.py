@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import math
 import secrets
 import threading
@@ -40,12 +41,23 @@ SESSION_DAYS = 30
 # One person's browsers and phones. Past this the oldest session ends, so a client
 # that signs in over and over cannot grow the table.
 MAX_SESSIONS = 64
-# Failed sign-ins one client may make in a window, and the window.
+# Failed sign-ins one client may make in a window, and the window. The "client" is
+# a bucket, not a bare address: a whole IPv6 /64 is one allocation handed to one
+# subscriber, so counting per /128 gave a guesser 2**64 budgets from a single line
+# (RS-R4). `_client_bucket` groups them.
 MAX_ATTEMPTS = 8
 WINDOW_SECONDS = 60.0
-# More clients than this at once is someone sending addresses, not a household. A
-# new one is refused rather than an old one forgotten, which would reset its count.
+# At most this many buckets are tracked at once, so the table cannot grow without
+# bound. Past it a newcomer is still let through (the global budget below bounds a
+# flood, not the table size): refusing a newcomer because the table was full let an
+# attacker fill it from one /64 and lock the owner out for the window (RS-R4).
 MAX_CLIENTS = 10_000
+# Wrong guesses across *all* buckets in one window. The per-bucket limit does not
+# see a flood spread thin across many /64s, each under MAX_ATTEMPTS; this does, and
+# only this ever slows a client on its first guess. A single-user or small-team
+# self-host never approaches it, and it holds a distributed guesser far below what a
+# 12-character password withstands.
+MAX_TOTAL_ATTEMPTS = 1_000
 # A cookie longer than this was not issued here.
 MAX_TOKEN = 128
 
@@ -78,6 +90,26 @@ def local_path(value: object) -> str:
     return value
 
 
+def _client_bucket(client: str) -> str:
+    """The rate-limit key for a connecting address.
+
+    One IPv6 /64 is a single allocation, so the whole /64 is one bucket; keying on
+    the full /128 let a guesser mint a fresh budget for every address in it. IPv4
+    is one address per bucket, an IPv4-mapped IPv6 address is keyed by the IPv4 it
+    carries, and anything that is not an address (a hostname, an empty string) is
+    its own bucket as written.
+    """
+    try:
+        ip = ipaddress.ip_address(client)
+    except ValueError:
+        return client
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
 class Gate:
     """One password, the sessions it opened, and the count of guesses against it."""
 
@@ -91,6 +123,8 @@ class Gate:
         self._lock = threading.Lock()
         self._sessions: OrderedDict[str, float] = OrderedDict()
         self._attempts: dict[str, tuple[int, float]] = {}
+        # (wrong guesses this window, when the window ends), across all buckets.
+        self._total: tuple[int, float] = (0, 0.0)
 
     def _digest(self, value: str) -> bytes:
         return hmac.new(self._key, value.encode("utf-8", "surrogatepass"), hashlib.sha256).digest()
@@ -148,21 +182,34 @@ class Gate:
         """Count one sign-in attempt from ``client``: 0 to go ahead, or the seconds to wait.
 
         The attempt is counted before the password is looked at, so a burst of
-        parallel guesses is cut off at MAX_ATTEMPTS like a sequence of them.
+        parallel guesses is cut off at MAX_ATTEMPTS like a sequence of them. Two
+        budgets apply: this bucket's own (MAX_ATTEMPTS), and the whole server's
+        (MAX_TOTAL_ATTEMPTS). A newcomer is never refused merely because the table
+        is full - only a bucket that has itself guessed too much, or a flood that
+        has spent the global budget, waits.
         """
         now = self._clock()
+        bucket = _client_bucket(client)
         with self._lock:
             for key in [k for k, (_, until) in self._attempts.items() if until <= now]:
                 del self._attempts[key]
-            count, until = self._attempts.get(client, (0, now + WINDOW_SECONDS))
+            total, total_until = self._total
+            if total_until <= now:
+                total, total_until = 0, now + WINDOW_SECONDS
+            count, until = self._attempts.get(bucket, (0, now + WINDOW_SECONDS))
             if count >= MAX_ATTEMPTS:
                 return max(1, math.ceil(until - now))
-            if client not in self._attempts and len(self._attempts) >= MAX_CLIENTS:
-                return math.ceil(WINDOW_SECONDS)
-            self._attempts[client] = (count + 1, until)
+            if total >= MAX_TOTAL_ATTEMPTS:
+                return max(1, math.ceil(total_until - now))
+            # Record the bucket while there is room; past MAX_CLIENTS let it
+            # through uncounted rather than lock out a newcomer. The global
+            # budget above is what bounds a flood that overflows the table.
+            if bucket in self._attempts or len(self._attempts) < MAX_CLIENTS:
+                self._attempts[bucket] = (count + 1, until)
+            self._total = (total + 1, total_until)
         return 0
 
     def forget(self, client: str) -> None:
         """A right password clears the count, so the owner's typos do not add up."""
         with self._lock:
-            self._attempts.pop(client, None)
+            self._attempts.pop(_client_bucket(client), None)

@@ -104,10 +104,52 @@ def test_guesses_are_counted_per_client_before_the_password_is_checked(monkeypat
     now[0] += auth.WINDOW_SECONDS
     assert gate.admit("10.0.0.9") == 0, "the window passes"
     gate.forget("10.0.0.9")
+
+
+def test_a_full_table_does_not_lock_out_a_newcomer(monkeypatch):
+    """Refusing a newcomer because the table was full let an attacker fill the
+    table and lock the owner out for the window (RS-R4). A newcomer is admitted
+    even with the table full; the table simply stops growing, and a flood is
+    bounded by the global budget instead."""
+    gate = auth.Gate(PASSWORD)
     monkeypatch.setattr(auth, "MAX_CLIENTS", 2)
     assert gate.admit("10.0.0.11") == 0 and gate.admit("10.0.0.12") == 0
-    assert gate.admit("10.0.0.13") > 0, "a full table refuses a newcomer rather than forget a count"
-    assert gate.admit("10.0.0.11") == 0, "and still counts the clients it has"
+    assert gate.admit("10.0.0.13") == 0, "the table is full but the newcomer still gets its check"
+    assert len(gate._attempts) == 2, "and the table did not grow past its bound"
+    assert gate.admit("10.0.0.11") == 0, "an already-tracked client still counts"
+
+
+def test_ipv6_clients_are_grouped_by_their_64(monkeypatch):
+    """A whole /64 is one subscriber's allocation. Keyed per /128 a guesser had
+    MAX_ATTEMPTS * 2**64 tries from one line; grouped by /64 the same line gets
+    MAX_ATTEMPTS, like any other client (RS-R4)."""
+    now = [5_000.0]
+    gate = auth.Gate(PASSWORD, clock=lambda: now[0])
+    addresses = [f"2001:db8::{i}" for i in range(1, auth.MAX_ATTEMPTS + 5)]
+    admitted = [gate.admit(a) for a in addresses]
+    assert admitted[:auth.MAX_ATTEMPTS] == [0] * auth.MAX_ATTEMPTS
+    assert all(w > 0 for w in admitted[auth.MAX_ATTEMPTS:]), "every address in the /64 shares one budget"
+    assert len(gate._attempts) == 1, "the whole /64 is one bucket"
+    # A different /64 is its own bucket; an IPv4-mapped address keys on the IPv4.
+    assert auth._client_bucket("2001:db8::9") != auth._client_bucket("2001:db8:0:1::9")
+    assert auth._client_bucket("::ffff:203.0.113.5") == auth._client_bucket("203.0.113.5") == "203.0.113.5"
+    assert auth._client_bucket("10.0.0.9") == "10.0.0.9"
+    assert auth._client_bucket("laptop.lan") == "laptop.lan" and auth._client_bucket("") == ""
+
+
+def test_a_flood_across_buckets_is_bounded_globally(monkeypatch):
+    """The per-bucket limit never sees a flood spread one guess per /64. The
+    global budget does, and it is the only thing that slows a client on its
+    first guess (RS-R4)."""
+    now = [5_000.0]
+    monkeypatch.setattr(auth, "MAX_TOTAL_ATTEMPTS", 20)
+    gate = auth.Gate(PASSWORD, clock=lambda: now[0])
+    for i in range(auth.MAX_TOTAL_ATTEMPTS):
+        assert gate.admit(f"2001:db8:{i}::1") == 0  # a fresh /64 each time, all under MAX_ATTEMPTS
+    assert gate.admit("2001:db8:ffff::1") > 0, "the global budget is spent"
+    assert gate.admit("198.51.100.7") > 0, "it slows even a brand-new client"
+    now[0] += auth.WINDOW_SECONDS
+    assert gate.admit("198.51.100.7") == 0, "and refills with the window"
 
 
 @pytest.mark.parametrize("value", ["/", "/m", "/#people", "/?x=1", "/m?next=/", "/.//x"])
@@ -323,6 +365,23 @@ def test_serve_takes_names_not_patterns(tmp_path, monkeypatch, capsys, name):
     assert repr(name) in capsys.readouterr().err
     status, served = _serve(monkeypatch, tmp_path, "--host", name)
     assert status == 2 and served == {}
+
+
+@pytest.mark.parametrize("name", ["stats.example.com", "laptop.lan", "192.168.1.20"])
+def test_serve_on_loopback_still_needs_a_password_for_a_forwarded_name(tmp_path, monkeypatch, capsys, name):
+    """Bound to 127.0.0.1 behind a proxy that forwards a name of its own (the README's
+    own recipe), the server is reached from beyond this machine, and the app cannot
+    see the proxy. Without a password it served everything unauthenticated (RS-R10)."""
+    status, served = _serve(monkeypatch, tmp_path, "--host", "127.0.0.1", "--allow-host", name)
+    assert status == 2 and served == {}
+    assert "RANDOSTATS_PASSWORD" in capsys.readouterr().err
+    # A loopback allow-host name is fine: it is still just this machine.
+    status, served = _serve(monkeypatch, tmp_path, "--host", "127.0.0.1", "--allow-host", "127.0.0.2")
+    assert status == 0, "a loopback allow-host name needs no password"
+    # And with a password the forwarded name is served.
+    monkeypatch.setenv("RANDOSTATS_PASSWORD", PASSWORD)
+    status, served = _serve(monkeypatch, tmp_path, "--host", "127.0.0.1", "--allow-host", name)
+    assert status == 0
 
 
 def test_serve_with_a_password_asks_for_it_wherever_it_binds(tmp_path, monkeypatch):

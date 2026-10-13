@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -26,6 +27,47 @@ LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
 LEFT JOIN chat c ON c.ROWID = cmj.chat_id
 ORDER BY m.date
 """
+
+# The four relations ``_QUERY`` reads. The file is other people's data, opened
+# read-only - but read-only mode stops writes, not *computation*. A ``message``
+# that is really ``CREATE VIEW message AS WITH RECURSIVE ... `` makes the
+# ORDER BY sort an endless stream and spill temp files until the disk is full
+# (RS-R1), and a view is the uploader's to define however they like. So each
+# of these must be an ordinary table before the query runs: a table's rows are
+# the finite rows the file stores, which the upload cap already bounds. A
+# generated column could carry a per-row expression, so those are refused too
+# (SQLite forbids subqueries and recursion in one, so it cannot itself be
+# unbounded, but the plain shape is the one a real chat.db has).
+_REQUIRED_TABLES = ("message", "handle", "chat", "chat_message_join")
+
+# Even with ordinary tables, the joins can fan out: ``chat_message_join`` with
+# many rows per message multiplies the rows the ORDER BY must sort, so a file
+# within the upload cap can still make the sort run for minutes and spill
+# gigabytes of temp (two 2M-row tables fully crossed is 4e12 rows). A real
+# chat.db of a million messages sorts in about a second; a file at the 256 MB
+# upload cap holds at most ~4M rows and sorts in about five. This budget is
+# well above that and below the attack, and a progress handler trips it so the
+# query is interrupted rather than left to fill the disk.
+_QUERY_BUDGET_SECONDS = 10.0
+
+
+class UnexpectedSchema(ValueError):
+    """The uploaded database is not a plain Messages.app ``chat.db``."""
+
+
+def _assert_plain_schema(conn: sqlite3.Connection) -> None:
+    kinds = dict(conn.execute(
+        "SELECT name, type FROM sqlite_master WHERE name IN (?, ?, ?, ?)", _REQUIRED_TABLES).fetchall())
+    for name in _REQUIRED_TABLES:
+        kind = kinds.get(name)
+        if kind is None:
+            raise UnexpectedSchema(f"this does not look like a Messages chat.db: no {name} table")
+        if kind != "table":
+            raise UnexpectedSchema(f"{name} is a {kind}, not a table; a chat.db this app will read has plain tables")
+        # table_xinfo's last field is the hidden flag: 2 and 3 are STORED and
+        # VIRTUAL generated columns, which a plain table never has.
+        if any(row[6] in (2, 3) for row in conn.execute(f"PRAGMA table_xinfo({name})")):
+            raise UnexpectedSchema(f"{name} has a generated column; a chat.db this app will read has plain tables")
 
 
 def _apple_date(raw: int | float | None) -> datetime | None:
@@ -67,7 +109,20 @@ def parse(data: bytes, self_name: str) -> Iterable[Message]:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            rows = conn.execute(_QUERY).fetchall()
+            _assert_plain_schema(conn)
+            deadline = time.monotonic() + _QUERY_BUDGET_SECONDS
+            # Called every ~100,000 VM steps; a non-zero return interrupts the
+            # query (sqlite3.OperationalError), which the caller shows as a
+            # refusal. This fires all through the sort, so a fanned-out join is
+            # stopped before it fills the disk, not after.
+            conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 100_000)
+            try:
+                rows = conn.execute(_QUERY).fetchall()
+            except sqlite3.OperationalError as exc:
+                raise UnexpectedSchema(
+                    "reading this chat.db took too long and was stopped; it holds far more rows than a "
+                    "real Messages database, or its tables cross-reference each other") from exc
+            conn.set_progress_handler(None, 0)
         finally:
             conn.close()
     finally:
