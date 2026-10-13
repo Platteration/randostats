@@ -118,6 +118,8 @@ class FakeGoogle:
         if "email" in account:
             claims["email"] = account["email"]
             claims["email_verified"] = account.get("email_verified", False)
+        if "hd" in account:  # a Google Workspace account: its domain
+            claims["hd"] = account["hd"]
         for key, value in grant["claims"].items():
             if value is None:
                 claims.pop(key, None)

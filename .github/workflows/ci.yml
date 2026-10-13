@@ -24,7 +24,12 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # A named release, not ubuntu-latest, which becomes Ubuntu 26.04 from 2026-10-19:
+    # the e2e extra's Playwright 1.56.0 has no Chromium build for 26.04, so its
+    # `playwright install --with-deps chromium` below would fail there.
+    # e2e/test_ci_runner.py asks the pinned Playwright whether it has a build for the
+    # release named here, so raising Playwright, and then the runner, are one change.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false

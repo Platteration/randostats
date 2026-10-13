@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exception_handlers import http_exception_handler
@@ -541,6 +541,16 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
             # the state checked at the callback is what stops a sign-in forced on
             # someone. The cookie is SameSite=Lax so that Google's redirect back, a
             # top-level navigation from another site, still carries it.
+            if not google_config.answers_at(request.headers.get("host", "")):
+                # Opened under another name the server answers to (localhost for an
+                # address that says 127.0.0.1, a LAN name beside the domain): the cookie
+                # would be set there and Google sends the browser back to RANDOSTATS_APP_URL,
+                # where it is not, so the sign-in could only fail. The same sign-in page at
+                # that address instead, to start from there; a page, since the start route
+                # itself, under /api/, answers this site's own pages alone.
+                back = auth.local_path(request.query_params.get("return"))
+                return RedirectResponse(google_config.app_url + "login?" + urlencode({"next": back, "signin": "here"}),
+                                        status_code=302)
             location, sealed = signin.start(request.query_params.get("return"))
             response = RedirectResponse(location, status_code=302)
             response.set_cookie(google.FLOW_COOKIE, sealed, max_age=google.FLOW_SECONDS, path="/",
@@ -562,10 +572,10 @@ def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
                 if wait:
                     raise google.Refused("busy")
                 identity = signin.redeem(flow, request.query_params.get("code"))
-                if not google_config.allows(identity):
-                    # The account id (checked to be letters, digits, - and _), never the
-                    # email: the owner reads it here to put their own on the list.
-                    raise google.Refused(f"the Google account {identity.sub} is not in {google.ALLOWED}")
+                # Named by its account id, never its email (GoogleConfig.refusal).
+                refusal = google_config.refusal(identity)
+                if refusal is not None:
+                    raise google.Refused(refusal)
             except google.Refused as refused:
                 # Never Google's own words: the reason is one of google.py's.
                 log.warning("randostats: sign-in with Google refused (%s)", refused.reason)

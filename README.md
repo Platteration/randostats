@@ -21,9 +21,12 @@ rather than on your device, and starting with `--llm` sends the claim being
 answered to the optional service described further down this page. Neither one
 touches your imported messages. A third is for a server set up for it: signing
 in with Google sends your browser to Google and back, and Google tells the
-server your account id and, if Google has verified it, your email address. The
-server keeps the address only in your session, in its memory, to say who is
-signed in, and asks Google nothing else; nothing of your messages goes to Google.
+server your account id, your email address, whether Google has verified it and,
+for a Google Workspace account, its domain. The server keeps the address only
+when Google says it is verified, and then only in your session, in its memory,
+to say who is signed in; it asks Google nothing else, and nothing of your
+messages goes to Google. An account not on the server's list is turned away,
+and its account id is written to the server's log.
 
 ## What it does
 
@@ -331,7 +334,7 @@ can let in the Google accounts you list. Set all four, in the environment:
 | `RANDOSTATS_APP_URL` | The site's own address, its root: `https://stats.example.com/`. Google sends the browser back to `RANDOSTATS_APP_URL` + `api/auth/google/callback`, so it is configured, never read from a request. https, or http for `localhost`, `127.0.0.1` and `[::1]` only (Google's rule too); no path, since randostats runs at the root of its origin. Its name has to be one the server answers to (`--allow-host`). |
 | `RANDOSTATS_GOOGLE_CLIENT_ID` | A Google OAuth client of type **Web application** (`….apps.googleusercontent.com`) whose authorised redirect URI is that callback address. |
 | `RANDOSTATS_GOOGLE_CLIENT_SECRET` | That client's secret. |
-| `RANDOSTATS_GOOGLE_ALLOWED` | Who may come in, separated by commas or spaces: Google account ids (the `sub`), or email addresses Google has verified, compared without regard to case. Prefer the id: an address is matched only when Google says it is verified, and Google speaks for an address with full authority only for Gmail and Google Workspace accounts. A first sign-in by an account not on the list is turned away, and the server's log names its id, which is how you find your own. |
+| `RANDOSTATS_GOOGLE_ALLOWED` | Who may come in, separated by commas or spaces: Google account ids (the `sub`), or email addresses, compared without regard to case. Prefer the id. An address lets an account in only where Google speaks for it: a Gmail address (`gmail.com`, `googlemail.com`), or an address at the Google Workspace domain the account belongs to (the ID token's `hd`, which has to be the address's own domain, not another of the organisation's). Any other address never matches, verified or not: Google marks an address verified once a mail sent to it has been read, so whoever could once read yours (a lapsed domain bought again, a former employer, a shared alias) can make a Google account with it. List such an account by its id. A first sign-in by an account not on the list is turned away, and the server's log names its id (and says so when its address is listed but Google does not speak for it), which is how you find your own. |
 
 Set any of the last three and the server takes it that you asked for sign-in
 with Google: if any of the four is missing or malformed, or the address names a
@@ -359,7 +362,13 @@ the same limit as a wrong password, since anyone can start a sign-in. A sign-in
 that does not complete comes back to `/login` with "Sign-in didn't complete.";
 one that does gets the same 30-day session as the password, and the header says
 "Signed in as" the address (or "Signed in with Google"). The redirect URI must
-be registered in Google Cloud exactly as the server writes it. To set it up:
+be registered in Google Cloud exactly as the server writes it, and the site opened
+at that address to sign in with Google: the sign-in cookie belongs to the name the
+browser used, and Google comes back to `RANDOSTATS_APP_URL`, so a sign-in started under
+another name the server answers to (`localhost` when the address says
+`127.0.0.1`, a LAN name beside the domain) could not finish. The server sends it
+to the sign-in page at `RANDOSTATS_APP_URL` instead, which says why, to start
+again from there. To set it up:
 
 1. In Google Cloud, a project and its OAuth consent screen (app name, support
    email, your domain; for one owner, "Testing" with yourself as a test user is
@@ -506,7 +515,10 @@ while the server redeems the code at the fake token endpoint in
 `tests/fake_google.py` (`e2e/google_server.py`), never at an address of its own.
 
 CI runs both on Python 3.10 and 3.12, with and without the `llm` extra, and
-the browser walk after them, then installs the built package and runs it from outside the checkout, which
+the browser walk after them, on Ubuntu 24.04 by name rather than `ubuntu-latest`,
+which becomes Ubuntu 26.04 from 2026-10-19: Playwright 1.56.0, the walk's pin, has
+no Chromium build for 26.04, and the walk (`e2e/test_ci_runner.py`) asks the pinned
+Playwright whether it has one for the release CI names. CI then installs the built package and runs it from outside the checkout, which
 is the only way to tell that the data files ship. A separate job runs
 `pip-audit`, pinned with its dependencies by hash, over the declared
 dependencies and the `llm` extra twice: at the newest versions the ranges in
@@ -540,5 +552,6 @@ randostats/
                   drill-down drawer, Wrapped card, Web Speech API listening, phone PWA,
                   the safety net (guard.js), sign-in and 404 pages, robots.txt, security.txt
 samples/          make_sample.py generates fake exports
-e2e/              the browser walk (Playwright): the site under its own policy
+e2e/              the browser walk (Playwright): the site under its own policy, and
+                  whether the pinned Playwright has a Chromium for CI's runner
 ```

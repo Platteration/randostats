@@ -34,6 +34,12 @@ HTML = {"accept": "text/html,application/xhtml+xml"}
 STATIC = Path(__file__).resolve().parent.parent / "randostats" / "static"
 ENV = {google.APP_URL: "https://stats.example.com/", google.CLIENT_ID: fake_google.CLIENT_ID,
        google.CLIENT_SECRET: fake_google.CLIENT_SECRET, google.ALLOWED: OWNER["sub"]}
+# The owner's account as a Google Workspace one: the ID token names its domain (hd).
+WORKSPACE_OWNER = {**OWNER, "hd": "example.com"}
+# A Google account someone made with the owner's outside address, having once read its
+# mail (a lapsed domain bought again, a former employer, a shared alias): Google marks
+# the address verified, and names no Workspace domain.
+IMPOSTOR = {"sub": "999999999999999999999", "email": "owner@example.com", "email_verified": True}
 
 
 @pytest.fixture(autouse=True)
@@ -117,6 +123,21 @@ def test_half_a_set_up_is_refused_naming_what_is_missing(missing):
         google.read_config(env)
     assert f"missing {missing}" in str(refused.value)
     assert fake_google.CLIENT_SECRET not in str(refused.value)
+
+
+@pytest.mark.parametrize("with_address", [False, True])
+@pytest.mark.parametrize("alone", ["RANDOSTATS_GOOGLE_CLIENT_ID", "RANDOSTATS_GOOGLE_CLIENT_SECRET",
+                                   "RANDOSTATS_GOOGLE_ALLOWED"])
+def test_any_one_of_the_three_asks_for_sign_in_with_google(alone, with_address):
+    """Set any one of them, with the site's address or without, and the server does not
+    start without the others: it never runs without the sign-in that was asked for."""
+    env = {alone: ENV[alone], **({"RANDOSTATS_APP_URL": ENV[google.APP_URL]} if with_address else {})}
+    with pytest.raises(ValueError) as refused:
+        google.read_config(env)
+    message = str(refused.value)
+    for name in ("RANDOSTATS_GOOGLE_CLIENT_ID", "RANDOSTATS_GOOGLE_CLIENT_SECRET", "RANDOSTATS_GOOGLE_ALLOWED"):
+        assert (f"missing {name}" in message) is (name != alone), (name, message)
+    assert ("missing RANDOSTATS_APP_URL" in message) is (not with_address), message
 
 
 @pytest.mark.parametrize("value, root", [
@@ -228,11 +249,55 @@ def test_start_sends_the_browser_to_google_with_pkce_state_and_nonce(signin):
     assert len(params["state"]) >= 43 and len(params["nonce"]) >= 43 and params["state"] != params["nonce"]
     line = set_cookies(r)[google.FLOW_COOKIE]
     flags = {part.strip().lower() for part in line.split(";")[1:]}
-    assert {"httponly", "secure", "path=/", "samesite=lax", f"max-age={google.FLOW_SECONDS}"} <= flags
+    assert {"httponly", "secure", "path=/", "samesite=lax", "max-age=600"} <= flags, "ten minutes"
     assert not any(flag.startswith("domain") for flag in flags), "__Host-: no Domain"
     assert r.headers["referrer-policy"] == "no-referrer", "nothing of this site goes to Google in a Referer"
     other = urlsplit(begin(signin)[0]).query
     assert parse_qs(other)["state"] != [params["state"]] and parse_qs(other)["nonce"] != [params["nonce"]]
+
+
+def test_a_sign_in_started_under_another_name_starts_again_at_the_site_s_own(tmp_path):
+    """The sign-in cookie is set for the name the browser used, and Google sends the
+    browser back to RANDOSTATS_APP_URL: started under any other name the server answers
+    to, the sign-in could only fail. So it goes to the sign-in page at the site's own
+    address, with where it was going, and starts nothing."""
+    with app(tmp_path, config=fake_google.config("http://127.0.0.1:8765/")) as c:  # opened as localhost
+        r = c.get(google.START, params={"return": "/m?x=1"}, follow_redirects=False)
+        assert r.status_code == 302
+        assert r.headers["location"] == "http://127.0.0.1:8765/login?next=%2Fm%3Fx%3D1&signin=here"
+        assert google.FLOW_COOKIE not in set_cookies(r) and c.fake.calls == []
+        for attack in ("//evil.example", "https://evil.example/", None):
+            r = c.get(google.START, params={} if attack is None else {"return": attack}, follow_redirects=False)
+            assert r.headers["location"] == "http://127.0.0.1:8765/login?next=%2F&signin=here", attack
+        for host in ("127.0.0.1", "127.0.0.1:8766", "localhost:8765"):
+            r = c.get(google.START, headers={"host": host}, follow_redirects=False)
+            assert r.headers["location"].endswith("signin=here"), host
+        r = c.get(google.START, params={"return": "/m"}, headers={"host": "127.0.0.1:8765"}, follow_redirects=False)
+        assert r.headers["location"].startswith(google.AUTHORIZE_URL + "?") and google.FLOW_COOKIE in set_cookies(r)
+
+
+@pytest.mark.parametrize("app_url, host, same", [
+    ("https://stats.example.com/", "stats.example.com", True),
+    ("https://stats.example.com/", "Stats.Example.COM", True),
+    ("https://stats.example.com/", "stats.example.com:443", True),
+    ("https://stats.example.com:443/", "stats.example.com", True),
+    ("https://stats.example.com/", "stats.example.com:8443", False),
+    ("https://stats.example.com:8443/", "stats.example.com", False),
+    ("https://stats.example.com/", "laptop.lan", False),
+    ("https://stats.example.com/", "stats.example.com.lan", False),
+    ("https://stats.example.com/", "", False),
+    ("https://stats.example.com/", "stats.example.com:https", False),
+    ("http://127.0.0.1:8765/", "127.0.0.1:8765", True),
+    ("http://127.0.0.1:8765/", "localhost:8765", False),
+    ("http://127.0.0.1:8765/", "127.0.0.1", False),
+    ("http://localhost/", "localhost", True),
+    ("http://localhost/", "localhost:80", True),
+    ("http://localhost/", "localhost:443", False),
+    ("http://[::1]:8765/", "[::1]:8765", True),
+    ("http://[::1]:8765/", "[::1]:8766", False),
+])
+def test_the_site_s_own_name_and_port(app_url, host, same):
+    assert fake_google.config(app_url).answers_at(host) is same
 
 
 def test_start_is_this_site_s_own(signin):
@@ -272,21 +337,83 @@ def test_over_https_the_session_is_secure(tmp_path):
         assert c.fake.calls[0]["form"]["redirect_uri"] == "https://localhost/api/auth/google/callback"
 
 
+def test_behind_a_proxy_uvicorn_does_not_believe_the_session_is_secure_all_the_same(tmp_path):
+    """A TLS terminator whose X-Forwarded-Proto uvicorn does not trust hands the request on
+    as plain http, while the browser is on https: RANDOSTATS_APP_URL says so, and the
+    session cookie is Secure for it."""
+    with app(tmp_path, config=fake_google.config("https://localhost/"), base_url="http://localhost") as c:
+        r = sign_in_with_google(c)
+        assert "; secure" in set_cookies(r)[auth.COOKIE].lower()
+
+
 def test_each_sign_in_is_a_new_session(signin):
     first, second = session(sign_in_with_google(signin)), session(sign_in_with_google(signin))
     assert first != second
 
 
-def test_a_verified_email_on_the_list_lets_its_account_in(tmp_path):
-    with app(tmp_path, config=fake_google.config(subs=(), emails=("owner@example.com",))) as c:
-        r = sign_in_with_google(c)
+def test_an_address_on_the_list_lets_in_only_an_account_google_speaks_for(tmp_path, caplog):
+    """Google marks an address verified once a mail sent to it has been read, so whoever
+    could once read the owner's mail can make a Google account with the owner's address.
+    Listed by the address, only an account Google is the authority for comes in: one of
+    the Google Workspace domain the address is at (hd), or a Gmail address."""
+    caplog.set_level(logging.WARNING, logger="randostats")
+    listed = ("owner@example.com", "someone@gmail.com", "old@googlemail.com")
+    with app(tmp_path, config=fake_google.config(subs=(), emails=listed)) as c:
+        r = sign_in_with_google(c, WORKSPACE_OWNER)
         assert r.status_code == 302 and r.headers["location"] == "/"
         c.cookies.set(auth.COOKIE, session(r))
         assert c.get("/api/status").json()["user"] == {"email": "Owner@Example.com"}
-        assert failed(sign_in_with_google(c, {**OWNER, "email_verified": False})), \
+        c.cookies.clear()
+        assert failed(sign_in_with_google(c, IMPOSTOR)), "the owner's address on an account Google does not speak for"
+        assert failed(sign_in_with_google(c, OWNER)), "no Workspace domain: Google does not speak for example.com"
+        assert failed(sign_in_with_google(c, {**IMPOSTOR, "hd": "other.example"})), "another Workspace's account"
+        for gmail in ({"sub": "5", "email": "Someone@Gmail.com", "email_verified": True},
+                      {"sub": "6", "email": "old@googlemail.com", "email_verified": True}):
+            assert auth.COOKIE in set_cookies(sign_in_with_google(c, gmail)), gmail
+        assert failed(sign_in_with_google(c, {**WORKSPACE_OWNER, "email_verified": False})), \
             "an address Google has not verified is not the owner's"
-        assert failed(sign_in_with_google(c, {**OWNER, "email_verified": "true"})), "true, the JSON value"
+        assert failed(sign_in_with_google(c, {**WORKSPACE_OWNER, "email_verified": "true"})), "true, the JSON value"
         assert failed(sign_in_with_google(c, STRANGER))
+    assert f"the Google account {IMPOSTOR['sub']} is not in {google.ALLOWED}: its address is" in caplog.text
+    assert "owner@example.com" not in caplog.text.lower(), "the address is not logged"
+
+
+@pytest.mark.parametrize("identity, allowed", [
+    (google.Identity(OWNER["sub"]), True),
+    (google.Identity(OWNER["sub"] + "1"), False),  # the owner's id is a prefix of it
+    (google.Identity(OWNER["sub"][:-1]), False),  # it is a prefix of the owner's id
+    (google.Identity("1" + OWNER["sub"]), False),
+    (google.Identity("7", "owner@example.com", "example.com"), True),
+    (google.Identity("7", "OWNER@EXAMPLE.COM", "example.com"), True),
+    (google.Identity("7", "owner@example.com"), False),  # no Workspace domain
+    (google.Identity("7", "owner@example.com", "example.org"), False),  # another one's
+    (google.Identity("7", "owner@example.com", "mail.example.com"), False),
+    (google.Identity("7", "owner@other.example", "other.example"), False),  # the owner's name, another domain
+    (google.Identity("7", "other@example.com", "example.com"), False),  # the owner's domain, another name
+    (google.Identity("7", None, "example.com"), False),
+    (google.Identity("7", "boss@gmail.com"), True),
+    (google.Identity("7", "boss@googlemail.com"), False),  # listed at gmail.com only
+    (google.Identity("7", "boss@gmail.co"), False),
+    (google.Identity("7", "other@gmail.com"), False),
+    (google.Identity("7", "boss@other.example", "other.example"), False),
+])
+def test_who_the_list_lets_in(identity, allowed):
+    """Exactly the listed ids, and exactly the listed addresses where Google speaks for them."""
+    config = fake_google.config(subs=(OWNER["sub"],), emails=("owner@example.com", "boss@gmail.com"))
+    assert config.allows(identity) is allowed
+    assert (config.refusal(identity) is None) is allowed
+
+
+def test_the_workspace_domain_is_read_as_google_writes_it():
+    good = {"iss": "accounts.google.com", "aud": "c", "sub": "1", "nonce": "n", "exp": NOW + 9, "iat": NOW}
+
+    def read(**extra):
+        return google.check_claims({**good, **extra}, client_id="c", nonce="n", now=NOW)
+    assert read(hd="Example.COM", email="a@example.com", email_verified=True).domain == "example.com"
+    assert read(hd="example.com").domain == "example.com", "read whether or not there is an address"
+    for hd in (None, "", ["example.com"], 7, True):
+        assert read(hd=hd, email="a@example.com", email_verified=True).domain is None, hd
+    assert read(email="a@example.com", email_verified=True).domain is None
 
 
 def test_an_unverified_email_is_never_shown(signin):
@@ -393,7 +520,7 @@ def test_a_sign_in_cookie_runs_out():
     flow = google.GoogleSignIn(fake_google.config(), fetch=FakeGoogle(), clock=lambda: now[0])
     location, cookie = flow.start("/m")
     state = parse_qs(urlsplit(location).query)["state"][0]
-    now[0] += google.FLOW_SECONDS - 1
+    now[0] += 599
     assert flow.check(cookie, {"state": state}).back == "/m"
     now[0] += 1
     with pytest.raises(google.Refused, match="expired"):
@@ -441,7 +568,7 @@ def test_a_token_is_read_only_from_a_whole_answer(tmp_path):
             return status, answer + padding
         return fetch
 
-    for i, (status, padding) in enumerate(((500, b""), (201, b""), (200, b" " * google.RESPONSE_CAP))):
+    for i, (status, padding) in enumerate(((500, b""), (201, b""), (200, b" " * (64 * 1024)))):
         with app(tmp_path / str(i), fake=answered(status, padding)) as c:
             assert failed(sign_in_with_google(c)), (status, len(padding))
     with app(tmp_path / "whole", fake=answered(200, b" " * 100)) as c:
@@ -479,6 +606,8 @@ NOW = 1_800_000_000
 
 @pytest.mark.parametrize("claims, reason", [
     ({"iss": "https://evil.example"}, "iss"), ({"iss": None}, "iss"), ({"iss": ["accounts.google.com"]}, "iss"),
+    ({"iss": "https://evil.accounts.google.com"}, "iss"), ({"iss": "evilaccounts.google.com"}, "iss"),
+    ({"iss": "https://accounts.google.com/"}, "iss"), ({"iss": "https://accounts.google.com.evil.example"}, "iss"),
     ({"aud": "someone-else.apps.googleusercontent.com"}, "aud"), ({"aud": [fake_google.CLIENT_ID]}, "aud"),
     ({"aud": None}, "aud"),
     ({"azp": "someone-else.apps.googleusercontent.com"}, "azp"), ({"azp": ""}, "azp"),
@@ -712,9 +841,9 @@ def test_the_exchange_follows_no_redirect(token_server):
 
 
 def test_the_exchange_reads_no_more_than_the_cap(token_server):
-    server, _ = token_server((200, b"x" * (google.RESPONSE_CAP * 3), {}))
+    server, _ = token_server((200, b"x" * (3 * 64 * 1024), {}))
     status, body = google.post_form(f"http://127.0.0.1:{server.server_port}/token", b"", 5)
-    assert status == 200 and len(body) == google.RESPONSE_CAP + 1
+    assert status == 200 and len(body) == 64 * 1024 + 1, "64 KiB, and one byte to tell a longer answer by"
 
 
 def _certificate(tmp_path, name):
@@ -785,6 +914,7 @@ def test_the_pages_say_who_is_signed_in_only_as_text():
     login = (STATIC / "login.js").read_text()
     assert "/api/config" in login and "google.hidden = false" in login
     assert "ways.google === true" in login and "Sign-in didn't complete." in login
+    assert '"here"' in login and "it is the one Google sends you back to." in login
     assert "history.replaceState" in login
     app_js = (STATIC / "app.js").read_text()
     assert '$("#signed-in").textContent = who;' in app_js

@@ -32,7 +32,9 @@ responses, user-supplied text rendered into a page), and the app as a website:
   learn the password faster than the guess limit allows, or to be sent off the
   site by the sign-in page;
 - sign-in with Google (`randostats/google.py`): a way in for a Google account
-  that `RANDOSTATS_GOOGLE_ALLOWED` does not list, a sign-in finished in someone
+  that `RANDOSTATS_GOOGLE_ALLOWED` does not list, or lists only by an address
+  Google does not speak for (not Gmail, and not the account's own Google
+  Workspace domain), a sign-in finished in someone
   else's browser, an ID token accepted from anywhere but Google's token endpoint
   over verified TLS (the one case OpenID Connect lets its signature go
   unchecked), or being sent off the site by the return path;

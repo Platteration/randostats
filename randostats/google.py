@@ -24,9 +24,15 @@ checked, and nothing here takes one from anywhere else. Every claim is still che
 kept only when ``email_verified`` is true.
 
 Who may come in is ``RANDOSTATS_GOOGLE_ALLOWED``: Google account ids (``sub``) and
-verified email addresses. A Google account that is not on it is turned away like a
-wrong password. Nothing about the account is stored: the session it opens lives in
-this process (auth.py), with the email for "Signed in as", and ends like any other.
+email addresses. An address lets an account in only where Google speaks for it
+(``speaks_for``): Gmail's own, or one at the Google Workspace domain the ID token
+names (``hd``). Google marks any address verified once a mail sent to it has been
+read, so a Google account can be made with someone else's outside address by
+whoever could once read its mail (a lapsed domain bought again, a former employer, a
+shared alias); listed by the address, it would come in as the owner. A Google
+account that is not on the list is turned away like a wrong password. Nothing about
+the account is stored: the session it opens lives in this process (auth.py), with
+the email for "Signed in as", and ends like any other.
 
 No address here is configurable. The tests hand ``GoogleSignIn`` a ``fetch`` that
 answers the token endpoint itself; nothing points this at another host.
@@ -93,6 +99,9 @@ CLIENT_ID_SHAPE = re.compile(r"[A-Za-z0-9._-]{1,200}\.apps\.googleusercontent\.c
 CLIENT_SECRET_SHAPE = re.compile(r"[\x21-\x7e]{10,200}")
 B64URL = re.compile(r"[A-Za-z0-9_-]+")
 LOCAL_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+# The domains of Google's own mail: an address there is a Google account's whatever
+# the token says, and no one but Google can make one.
+GOOGLE_MAIL = frozenset({"gmail.com", "googlemail.com"})
 
 # (url, form body, timeout in seconds) -> (status, response body)
 Fetch = Callable[[str, bytes, float], tuple[int, bytes]]
@@ -130,10 +139,35 @@ class GoogleConfig:
         return self.app_url.startswith("https:")
 
     def allows(self, identity: Identity) -> bool:
-        """On the list by account id, or by an email Google says is verified."""
+        """On the list by account id, or by an address Google speaks for."""
+        return self.refusal(identity) is None
+
+    def refusal(self, identity: Identity) -> str | None:
+        """None for an account on the list; otherwise why not, for the log. The account
+        is named by its id (letters, digits, - and _, checked), never by its email: the
+        owner reads the id here to put their own on the list."""
         if identity.sub in self.subs:
-            return True
-        return identity.email is not None and identity.email.lower() in self.emails
+            return None
+        if identity.email is not None and identity.email.lower() in self.emails:
+            if speaks_for(identity):
+                return None
+            return (f"the Google account {identity.sub} is not in {ALLOWED}: its address is, but Google does "
+                    "not speak for that address (not Gmail, and not the account's Google Workspace domain)")
+        return f"the Google account {identity.sub} is not in {ALLOWED}"
+
+    def answers_at(self, host: str) -> bool:
+        """Whether a request whose Host header is ``host`` came to the site's own name and
+        port, the one Google sends the browser back to; the sign-in cookie set under any
+        other name the server answers to would not go back with it."""
+        try:
+            asked = urlsplit("//" + host)
+            port = asked.port
+        except ValueError:
+            return False
+        site = urlsplit(self.app_url)
+        # A browser leaves the scheme's own port out of Host, and the address may name it.
+        default = 443 if site.scheme == "https" else 80
+        return asked.hostname == site.hostname and (port or default) == (site.port or default)
 
 
 def parse_app_url(text: str) -> str | None:
@@ -214,7 +248,19 @@ def read_config(environ: Mapping[str, str]) -> GoogleConfig | None:
 @dataclass(frozen=True)
 class Identity:
     sub: str
-    email: str | None = None
+    email: str | None = None  # only one Google says is verified
+    domain: str | None = None  # hd, lower case: the account's Google Workspace domain, if it has one
+
+
+def speaks_for(identity: Identity) -> bool:
+    """Whether Google is the authority for the account's address, as Google's own guidance
+    for its ID tokens puts it: an address of Google's own mail, or an account of a Google
+    Workspace domain (``hd``), here held to the address's own domain. Any other address,
+    verified or not, says only that a mail sent to it was once read."""
+    if identity.email is None:
+        return False
+    domain = identity.email.rpartition("@")[2].lower()
+    return domain in GOOGLE_MAIL or identity.domain == domain
 
 
 @dataclass(frozen=True)
@@ -322,10 +368,13 @@ def check_claims(claims: object, *, client_id: str, nonce: str, now: float) -> I
     sub = claims.get("sub")
     if not isinstance(sub, str) or not SUBJECT.fullmatch(sub):
         raise Refused("sub")
+    # Compared with the address's domain and nothing else, so no shape is asked of it.
+    hd = claims.get("hd")
+    domain = hd.lower() if isinstance(hd, str) and hd else None
     email = claims.get("email")
     if claims.get("email_verified") is True and isinstance(email, str) and EMAIL.fullmatch(email):
-        return Identity(sub, email)
-    return Identity(sub)
+        return Identity(sub, email, domain)
+    return Identity(sub, domain=domain)
 
 
 def read_id_token(id_token: str) -> object:

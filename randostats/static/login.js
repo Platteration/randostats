@@ -21,8 +21,13 @@
   // The server checks this too (auth.local_path), and comes back to the site's
   // root for anything that is not a path here.
   googleStart.href = `/api/auth/google/start?return=${encodeURIComponent(next)}`;
-  if (params.get("signin") === "failed") {
-    result.textContent = "Sign-in didn't complete.";
+  // What the server sent the browser back to say: a sign-in with Google that did not
+  // work out, or one started under another of this server's names, which it sends to
+  // this, the address Google comes back to, to start again from here.
+  const signin = params.get("signin");
+  if (signin === "failed" || signin === "here") {
+    result.textContent = signin === "failed" ? "Sign-in didn't complete."
+      : "Sign in with Google from this address: it is the one Google sends you back to.";
     params.delete("signin");
     const rest = params.toString();
     history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);

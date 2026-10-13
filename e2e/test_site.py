@@ -497,6 +497,50 @@ def test_signing_in_with_google(browser, google_only):
     context.close()
 
 
+def test_a_sign_in_with_google_started_under_another_name(browser, google_only):
+    """The walk's server says its address is 127.0.0.1 (RANDOSTATS_APP_URL in
+    e2e/google_server.py) and answers to localhost too. Opened as localhost, Sign in with
+    Google goes to the sign-in page at 127.0.0.1, which says why, asking nothing of
+    Google, and from there signs in: the sign-in cookie is set for the name Google sends
+    the browser back to. Started at localhost, it was set there, and every such sign-in
+    came back to 127.0.0.1 without it and failed."""
+    base = google_only.base
+    other = base.replace("://127.0.0.1:", "://localhost:")
+    assert other != base
+    # One watch for each name: each judges its own origin's responses.
+    watches = [Watch(other, elsewhere=(base + "/", google.AUTHORIZE_URL + "?")),
+               Watch(base, elsewhere=(other + "/", google.AUTHORIZE_URL + "?"))]
+    context = new_context(browser)
+    page = context.new_page()
+    for watch in watches:
+        watch.attach(page)
+    account = {"as": fake_google.OWNER, "asked": 0}
+    google_signs_in(context, page, account)
+
+    page.goto(other + "/m")
+    assert page.url == other + "/login?next=%2Fm"
+    page.wait_for_selector("#google-sign-in:not([hidden])")
+    page.click("#google-start")
+    page.wait_for_selector("#sign-in-result:has-text(\"it is the one Google sends you back to\")")
+    assert page.inner_text("#sign-in-result") == \
+        "Sign in with Google from this address: it is the one Google sends you back to."
+    assert page.url == base + "/login?next=%2Fm", "at the site's own address, the note said once"
+    assert account["asked"] == 0, "nothing was asked of Google from the other name"
+    assert google.FLOW_COOKIE not in {c["name"] for c in context.cookies()}
+    assert page.get_attribute("#google-start", "href") == "/api/auth/google/start?return=%2Fm"
+
+    page.click("#google-start")
+    page.wait_for_url(base + "/m")
+    page.wait_for_selector("#examples .chip")
+    assert account["asked"] == 1
+    sessions = [c for c in context.cookies() if c["name"] == "randostats_session"]
+    assert [c["domain"] for c in sessions] == ["127.0.0.1"], sessions
+    assert "refused" not in google_only.log.read_text(errors="replace")
+    for watch in watches:
+        watch.check(page)
+    context.close()
+
+
 def test_the_sign_in_cookie_is_read_by_its_exact_name(google_only):
     """A cookie named with a raw 0xA0 or 0x85 byte before the sign-in cookie's name
     is another cookie to a browser, and one a sibling subdomain or a plain-http answer

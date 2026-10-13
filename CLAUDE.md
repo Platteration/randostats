@@ -176,13 +176,23 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   in for it, which holds only for a token `redeem` fetched itself, so nothing may
   ever take an ID token from anywhere else. Every claim is checked (`iss`, `aud`,
   `azp`, `exp`, `iat` with a minute's skew, `nonce`, `sub`), the email only when
-  `email_verified` is `true`, and `RANDOSTATS_GOOGLE_ALLOWED` (subs or verified
-  emails) decides who; the log names a refused account by its sub. Each exchange
-  counts against the guess limit (`Gate.admit`), since anyone can get a fresh
-  sign-in cookie. It opens the same in-memory session as the password, holding the
-  email for "Signed in as". `/api/config` tells the sign-in page which ways in
-  there are; the tests reach Google through `create_app(fetch=...)` and
-  `tests/fake_google.py`, never an address of their own.
+  `email_verified` is `true`, and `RANDOSTATS_GOOGLE_ALLOWED` (subs or emails)
+  decides who; the log names a refused account by its sub (`GoogleConfig.refusal`).
+  A listed email lets an account in only where Google speaks for the address
+  (`speaks_for`): `gmail.com`/`googlemail.com`, or an `hd` claim equal to the
+  address's own domain. `email_verified` alone is not that: Google marks any
+  address verified once a mail to it was read, so a Google account made with the
+  owner's outside address by whoever once read its mail came in as the owner.
+  Each exchange counts against the guess limit (`Gate.admit`), since anyone can
+  get a fresh sign-in cookie. It opens the same in-memory session as the
+  password, holding the email for "Signed in as". The start route begins a
+  sign-in only at `RANDOSTATS_APP_URL`'s own name and port
+  (`GoogleConfig.answers_at`): the flow cookie belongs to the name the browser
+  used and Google comes back to the configured one, so under any other name it
+  sends the browser to the sign-in page there (`?signin=here`), a page because the
+  start route, under `/api/`, answers first-party requests alone. `/api/config`
+  tells the sign-in page which ways in there are; the tests reach Google through
+  `create_app(fetch=...)` and `tests/fake_google.py`, never an address of their own.
 - **Pages.** Every page with a script loads `/static/guard.js` first and has a
   `<noscript>` note; its own script ends with `window.RandoGuard.started()`, or
   the guard reports a failed start on every load. So nothing on the way there
