@@ -215,17 +215,24 @@ def test_security_txt_is_current_and_says_what_security_md_says(client):
     not move)."""
     r = client.get("/.well-known/security.txt")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
-    fields = dict(line.split(": ", 1) for line in r.text.splitlines() if line and not line.startswith("#"))
+    pairs = [line.split(": ", 1) for line in r.text.splitlines() if line and not line.startswith("#")]
+    fields = {name: [value for key, value in pairs if key == name] for name, _ in pairs}
     assert set(fields) == {"Contact", "Expires", "Policy", "Preferred-Languages"}
-    expires = datetime.strptime(fields["Expires"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    assert all(len(values) == 1 for name, values in fields.items() if name != "Contact"), fields
+    expires = datetime.strptime(fields["Expires"][0], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     assert now < expires, "security.txt has expired: renew Expires"
     assert expires - now <= timedelta(days=366), "Expires is at most a year out"
-    # SECURITY.md asks for private reports, so Contact is the private form, not the issues.
-    assert "private vulnerability reporting" in (ROOT / "SECURITY.md").read_text(encoding="utf-8")
-    assert fields["Contact"] == "https://github.com/Platteration/randostats/security/advisories/new"
-    assert fields["Policy"] == "https://github.com/Platteration/randostats/blob/main/SECURITY.md"
-    assert fields["Preferred-Languages"] == "en"
+    # SECURITY.md asks for private reports, so the private form comes first; while private
+    # reporting is switched off that form reaches nothing, and SECURITY.md sends the reporter
+    # to an issue that says only that there is a report, which is the second Contact.
+    security = " ".join((ROOT / "SECURITY.md").read_text(encoding="utf-8").split())
+    assert "private vulnerability reporting" in security
+    assert "open an issue that says only that you have a security report and how to reach you" in security
+    assert fields["Contact"] == ["https://github.com/Platteration/randostats/security/advisories/new",
+                                 "https://github.com/Platteration/randostats/issues"]
+    assert fields["Policy"] == ["https://github.com/Platteration/randostats/blob/main/SECURITY.md"]
+    assert fields["Preferred-Languages"] == ["en"]
 
 
 # -- the safety net -------------------------------------------------------------------

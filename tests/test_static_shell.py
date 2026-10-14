@@ -79,7 +79,7 @@ def test_repo_polish_docs_and_release_workflow_exist():
     text = (workflows / "ci.yml").read_text(encoding="utf-8")
     assert "python -m build" in text
     assert "pip install dist/*.whl" in text
-    assert re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v4", text)
+    assert re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v7\b", text)
 
 def test_every_script_is_parsed_in_ci_and_walked_by_the_escaping_lint():
     """There is no build step, so `node --check` in CI is the only thing that parses a

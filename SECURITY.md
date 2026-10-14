@@ -2,11 +2,16 @@
 
 ## Reporting a vulnerability
 
-Please report security issues privately rather than opening a public issue.
+Please report security issues privately rather than describing them in a
+public issue.
 
 Use GitHub's private vulnerability reporting on this repository:
 **Security → Report a vulnerability**. That opens a private advisory visible
-only to the maintainers.
+only to the maintainers. Private reporting is a setting the repository's owner
+switches on; while it is off that button is not there and the form reaches
+nothing, so open an issue that says only that you have a security report and
+how to reach you, with none of the details in it, and the maintainers will
+reach you privately.
 
 Include what you need to make the problem reproducible: the affected version
 or commit, the steps or input that trigger it, and what you observed. A proof
@@ -40,8 +45,9 @@ responses, user-supplied text rendered into a page), and the app as a website:
   unchecked), or being sent off the site by the return path;
 - a file served that is not part of the site.
 
-`/.well-known/security.txt` gives the same private reporting route. Its
-`Expires` date is renewed yearly; the test suite fails once it has passed.
+`/.well-known/security.txt` lists both routes, the private form first and then
+the issues page, and its `Policy` is this file on `main`. Its `Expires` date is
+renewed yearly; the test suite fails once it has passed.
 
 Out of scope: vulnerabilities in third-party dependencies that are already
 public and have an upstream fix, findings that require an attacker to already

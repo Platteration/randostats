@@ -477,10 +477,11 @@ be dismissed. With JavaScript off, each page's `<noscript>` note says so.
 `/.well-known/security.txt` and the API answer. FastAPI's `/docs`, `/redoc` and
 `/openapi.json` are off, nothing else under `samples/` is served, and any other
 address is a 404, which in the browser is a page in the app's look with no
-script. `robots.txt` asks every crawler to stay out; `security.txt` points to
-the private report form [`SECURITY.md`](SECURITY.md) names, and its `Expires`
-(2027-10-08) has to be renewed before then: `tests/test_website.py` fails once it
-has passed.
+script. `robots.txt` asks every crawler to stay out; `security.txt` lists the
+private report form [`SECURITY.md`](SECURITY.md) names and then the issues page,
+for an issue that says only that there is a report while private reporting is
+switched off on the repository, and its `Expires` (2027-10-08) has to be renewed
+before then: `tests/test_website.py` fails once it has passed.
 
 **Launch checklist**, with `SITE` your HTTPS name:
 
@@ -515,10 +516,11 @@ while the server redeems the code at the fake token endpoint in
 `tests/fake_google.py` (`e2e/google_server.py`), never at an address of its own.
 
 CI runs both on Python 3.10 and 3.12, with and without the `llm` extra, and
-the browser walk after them, on Ubuntu 24.04 by name rather than `ubuntu-latest`,
-which becomes Ubuntu 26.04 from 2026-10-19: Playwright 1.56.0, the walk's pin, has
-no Chromium build for 26.04, and the walk (`e2e/test_ci_runner.py`) asks the pinned
-Playwright whether it has one for the release CI names. CI then installs the built package and runs it from outside the checkout, which
+the browser walk after them. Every job runs on Ubuntu 24.04 by name, as the shared
+conventions require, rather than `ubuntu-latest`, which becomes Ubuntu 26.04 from
+2026-10-19: Playwright 1.56.0, the walk's pin, has no Chromium build for 26.04, and
+the walk (`e2e/test_ci_runner.py`) asks the pinned Playwright whether it has one for
+the release CI names. CI then installs the built package and runs it from outside the checkout, which
 is the only way to tell that the data files ship. A separate job runs
 `pip-audit`, pinned with its dependencies by hash, over the declared
 dependencies and the `llm` extra twice: at the newest versions the ranges in

@@ -4,10 +4,12 @@ The check job installs Chromium with `python -m playwright install --with-deps
 chromium` on the runner it names, and Playwright has a Chromium build for some Ubuntu
 releases and not others: Playwright 1.56.0, the e2e extra's pin, has none for Ubuntu
 26.04, which `ubuntu-latest` becomes from 2026-10-19, so the install would fail there.
-So the check job names its release, and this asks the installed Playwright, told that
-platform (PLAYWRIGHT_HOST_PLATFORM_OVERRIDE), whether it would download a Chromium
-there. Here rather than in tests/, because it needs the e2e extra, which CI installs
-for this step.
+So every job names its release, the one image the shared conventions name (RUNNER in
+tests/test_conventions.py, moved in every repository at once), and this asks the
+installed Playwright, told the check job's platform (PLAYWRIGHT_HOST_PLATFORM_OVERRIDE),
+whether it would download a Chromium there: the question CONVENTIONS.md has each
+repository ask before the runner moves. Here rather than in tests/, because it needs the
+e2e extra, which CI installs for this step.
 """
 
 from __future__ import annotations
@@ -74,7 +76,8 @@ def test_the_job_that_installs_the_browser_names_a_release_playwright_has_one_fo
 
 def test_the_reason_ci_yml_gives_for_naming_the_release_holds():
     """ci.yml says why the check job does not run on ubuntu-latest; while that is true,
-    it names this Playwright. Once a raised Playwright has a build for 26.04, this fails,
-    and the runner can follow it."""
+    it names this Playwright. Once a raised Playwright has a build for 26.04, this fails
+    and the comment changes with it; the runner itself moves with the conventions test's
+    RUNNER, in every job of every repository at once."""
     assert f"Playwright {version('playwright')} has no Chromium build for 26.04" in CI.read_text()
     assert _chromium_download("26.04") is None

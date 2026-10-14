@@ -15,17 +15,39 @@ import hashlib
 import json
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 # Update these when a shared text changes — in every repository, in one pass.
 EDITORCONFIG_SHA = "85bccbd23a9070becfe1dc0dbb9ad7305fb2bb98f92f54cb9856d7d6eca4ebfe"
-CONVENTIONS_SHA = "6afaa593e5df37dfdfa0b4a53dcc52d8aa59cf9636297ab457551cc7677968fe"
-REVIEW_STATUS_SHA = "5a22e3f5833fa7576edd0ca0b11c8da94e5bcae33a5d13bad6b845c8edb78989"
+CONVENTIONS_SHA = "8b8f103281feba2c529f3fd53916aa3496b32440d7799c4e10ba2b74139bf85a"
+REVIEW_STATUS_SHA = "76028e2322f083eadee6727db50a9f4de1cb9cf3f4c23e12ea8945d0b97071d8"
+AGENTS_RULES_SHA = "dae420f0895e527ee6159b16618ca077e515f5af1a2d302b2cdf3f9fdec0cb8b"
+# The one runner image every job of every workflow names (CONVENTIONS.md, "CI"), never
+# ubuntu-latest, which GitHub moves to a new release on a date of its own. Moving it is one
+# change, made here and in test/conventions.mjs and every workflow, in one pass.
+RUNNER = "ubuntu-24.04"
 # CI's weekly run (CONVENTIONS.md, "CI"). Not at the top of the hour, which GitHub's
 # documentation names as a high-load time, when a scheduled run can be delayed or dropped.
 SCHEDULE = "17 6 * * 1"
+# The first major of each official action whose runtime is Node 24, as test/conventions.mjs
+# has it. An official action not listed here fails until it is added, in every repository. The
+# floor is read from the tag comment; NODE20_SHAS lists the commits every tag of each Node 20
+# major points at (the first twelve hex digits), and a pin to one fails whatever its comment says.
+ACTION_FLOORS = {"checkout": 5, "setup-node": 5, "setup-python": 6, "upload-artifact": 6, "upload-pages-artifact": 5, "deploy-pages": 5}
+NODE20_SHAS = {
+    "checkout": "08eba0b27e82 0ad4b8fadaa2 11bd71901bbe 11d5960a3267 1d96c772d194 1e31de5234b9 34e114876b0b 44c2b7a8a4ea 692973e3d937 8ade135a41bc 9bb56186c3b0 a5ac7e51b410 b4ffde65f463 d632683dd7b4 eef61447b9ff",
+    "setup-node": "0a44ba784172 1d0ff469b7ec 1e60f620b954 39370e3970a6 49933ea5288c 60edb5dd545a 8f152de45cc3 b39b52d1213e cdca7365b2da",
+    "setup-python": "0a5c61591373 0b93645e9fea 39cd14951b08 42375524e23c 82c7e631bb3c 8d9ed9ac5c53 a26af69be951 f677139bbe7f",
+    "upload-artifact": "0b2256b8c012 1746f4ab65b1 1eb3cb2b3e0f 26f96dfa697d 330a01c490ac 4cec3d8aa04e 50769540e7f4 5d5d22a31266 604373da6381 65462800fd76 65c4c4a1ddee 694cdabd8bdb 6f51ac03b935 834a144ee995 84480863f228 89ef406dd8d7 b4b15b8c7c6a c7d193f32edc ea165f8d65b6",
+    "upload-pages-artifact": "0252fc4ba762 56afc609e742 7b1f4a764d45",
+    "deploy-pages": "7a9bd943aa5e 87c3283f01cd d6db90164ac5 d8af841ac341 decdde0ac072 f33f41b675f0",
+}
+# The browser install, in the one form a workflow here writes it, and any install however spelt.
+BROWSER_INSTALL = "python -m playwright install --with-deps chromium"
+ANY_BROWSER_INSTALL = re.compile(r"\bplaywright(@\S+)?\s+install\b")
 CI = ".github/workflows/ci.yml"
 
 
@@ -74,12 +96,29 @@ def review_status(review: str) -> str:
     return "\n".join(lines[starts[0] : ends[0]]) + "\n"
 
 
-def test_editorconfig_conventions_and_review_status_are_the_shared_copies():
+def agents_rules(agents: str) -> str:
+    """AGENTS.md's working rules: from the line `# Working rules for coding agents` to the end
+    of its section `## 10. Never`, which ends at the next heading of level one or two, at the
+    next line that opens an HTML comment or at the end of the file, trailing blank lines aside."""
+    lines = agents.split("\n")
+    starts = [i for i, text in enumerate(lines) if text == "# Working rules for coding agents"]
+    assert len(starts) == 1, 'AGENTS.md has the working rules once, under "# Working rules for coding agents"'
+    never = next((i for i, text in enumerate(lines) if i > starts[0] and text == "## 10. Never"), None)
+    assert never is not None, 'the working rules end with the section "## 10. Never"'
+    end = next((i for i, text in enumerate(lines) if i > never and (re.match(r"#{1,2} ", text) or text.startswith("<!--"))), len(lines))
+    block = lines[starts[0] : end]
+    while block and block[-1] == "":
+        block.pop()
+    return "\n".join(block) + "\n"
+
+
+def test_editorconfig_conventions_review_status_and_agents_rules_are_the_shared_copies():
     assert sha((ROOT / ".editorconfig").read_bytes()) == EDITORCONFIG_SHA, ".editorconfig differs from the shared copy"
     assert sha((ROOT / "CONVENTIONS.md").read_bytes()) == CONVENTIONS_SHA, "CONVENTIONS.md differs from the shared copy"
     assert sha(review_status(read("REVIEW.md")).encode("utf-8")) == REVIEW_STATUS_SHA, (
         'the "Status of the shared items" block of REVIEW.md differs from the shared copy'
     )
+    assert sha(agents_rules(read("AGENTS.md")).encode("utf-8")) == AGENTS_RULES_SHA, "the working rules in AGENTS.md differ from the shared copy"
 
 
 def test_python_is_pinned_once_and_pyproject_agrees():
@@ -339,8 +378,9 @@ def steps_of(job) -> list:
 
 
 def action(step, name: str) -> bool:
-    """Whether `step` uses actions/<name>, wherever in the step its `uses:` is."""
-    return is_mapping(step) and isinstance(step.get("uses"), str) and step["uses"].startswith(f"actions/{name}@")
+    """Whether `step` uses actions/<name>, wherever in the step its `uses:` is (GitHub reads the
+    owner and the name in any case)."""
+    return is_mapping(step) and isinstance(step.get("uses"), str) and step["uses"].lower().startswith(f"actions/{name}@")
 
 
 def scalars(x) -> list[str]:
@@ -367,23 +407,38 @@ STEP_KEYS = ["name", "id", "run", "uses", "with", "env", "working-directory", "i
 # Variables that change how npm, Node, Python or the shell runs a step.
 TOOLCHAIN_ENV = re.compile(r"(npm_config_\w*|NODE_OPTIONS|NODE_PATH|PYTHON\w*|PYTEST_\w*|BASH_ENV|ENV|SHELL|SHELLOPTS|BASHOPTS|PATH|LD_\w+)", re.I)
 PINNED = re.compile(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}")
-PINNED_LINE = re.compile(r"\s*(- )?uses: [\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*")
+PINNED_LINE = re.compile(r"\s*(- )?uses: ([\w.-]+)/([\w./-]+)@([0-9a-f]{40}) # v(\d+)(\.\d+)*")
 MATRIX_PYTHON = "${{ matrix.python-version }}"
 
 
-def test_the_workflows_are_block_yaml_pinned_and_let_no_step_pass_red():
+def test_the_workflows_are_block_yaml_pinned_on_one_runner_and_let_no_step_pass_red():
     """Every workflow, every job and every step, whatever its spelling: a key the reader
     does not know, a job or step key outside these lists, or an environment variable a
-    tool reads, is a way for a step to pass red that no check below would see."""
+    tool reads, is a way for a step to pass red that no check below would see. Every job
+    names the one runner image as a plain value, and every official action is at a major
+    that runs on Node 24."""
     files = sorted(p.name for p in (ROOT / ".github/workflows").iterdir() if p.suffix in (".yml", ".yaml"))
     assert files == ["ci.yml"], f"one workflow, ci.yml: {files}"
     tree, lines, keys = workflow(CI)
     assert [k for k in tree if k not in TOP_KEYS] == [], f"no top-level key but {TOP_KEYS}: an env: or a defaults: there reaches every step"
     for key, n in keys:
         if key == "uses":
-            assert PINNED_LINE.fullmatch(lines[n]), f"{CI}:{n + 1}: every action is pinned to a commit SHA with its tag in a comment"
+            pinned = PINNED_LINE.fullmatch(lines[n])
+            assert pinned, f"{CI}:{n + 1}: every action is pinned to a commit SHA with its tag in a comment"
+            if pinned.group(2).lower() == "actions":
+                name = pinned.group(3).lower()
+                floor = ACTION_FLOORS.get(name)
+                assert floor is not None, f"{CI}:{n + 1}: actions/{name} is not an action this test knows: add its Node 24 floor, in every repository"
+                assert int(pinned.group(5)) >= floor, f"{CI}:{n + 1}: actions/{name} v{pinned.group(5)} runs on Node 20, which GitHub is retiring: v{floor} or later"
+                assert pinned.group(4)[:12] not in NODE20_SHAS[name].split(" "), (
+                    f"{CI}:{n + 1}: actions/{name}@{pinned.group(4)} is a commit of a Node 20 major, whatever its comment says: pin the SHA of the v{floor} (or later) tag"
+                )
+    assert [s for s in scalars(tree) if ANY_BROWSER_INSTALL.search(s) and s != BROWSER_INSTALL] == [], (
+        f"the browser is installed as `{BROWSER_INSTALL}`, in no other form"
+    )
     for name, job in jobs_of(tree).items():
         assert is_mapping(job), f"{name} is a job"
+        assert job.get("runs-on") == RUNNER, f"the {name} job runs on {RUNNER}, the one image every job names"
         assert [k for k in job if k not in JOB_KEYS] == [], f"the {name} job has no key but {JOB_KEYS}: no if:, continue-on-error, env: or permission of its own"
         assert steps_of(job), f"the {name} job has steps"
         for i, step in enumerate(steps_of(job), 1):
@@ -395,6 +450,9 @@ def test_the_workflows_are_block_yaml_pinned_and_let_no_step_pass_red():
                 assert PINNED.fullmatch(str(step["uses"])), f"{where} uses an action pinned to a commit SHA"
             if "if" in step:
                 assert step["if"] == "failure()" and action(step, "upload-artifact"), f"{where}: the only if: is if: failure() on an upload"
+            if action(step, "upload-pages-artifact"):
+                given = step.get("with") if is_mapping(step.get("with")) else {}
+                assert given.get("include-hidden-files") == "true", f"{where} keeps .well-known/ in the site (include-hidden-files: true)"
             if "env" in step:
                 assert is_mapping(step["env"]), f"{where}: env is a mapping"
                 assert [k for k in step["env"] if TOOLCHAIN_ENV.fullmatch(k)] == [], f"{where}: no env that npm, Node, Python or the shell reads"
@@ -468,7 +526,7 @@ def test_the_audit_job():
     job = jobs_of(tree).get("audit")
     assert is_mapping(job), "the audit is a job of its own"
     assert sorted(job) == ["runs-on", "steps", "timeout-minutes"], "the audit job has runs-on, timeout-minutes and steps, nothing else"
-    assert re.fullmatch(r"[\w.-]+", str(job["runs-on"])), "the audit job runs on one runner"
+    assert job["runs-on"] == RUNNER, f"the audit job runs on {RUNNER}"
     steps = steps_of(job)
     checkout = steps[0]["uses"] if steps and action(steps[0], "checkout") else "actions/checkout@<sha>"
     setup = steps[1]["uses"] if len(steps) > 1 and action(steps[1], "setup-python") else "actions/setup-python@<sha>"
@@ -494,8 +552,12 @@ def test_the_audit_job():
 
 
 def test_the_documents():
-    for f in ("README.md", "LICENSE", "SECURITY.md", "REVIEW.md", "CLAUDE.md", "CONVENTIONS.md", ".gitignore", ".github/dependabot.yml"):
+    for f in ("README.md", "LICENSE", "SECURITY.md", "REVIEW.md", "CLAUDE.md", "AGENTS.md", "CONVENTIONS.md", ".gitignore", ".github/dependabot.yml"):
         assert has(f), f"{f} exists"
+    claude = read("CLAUDE.md").split("\n")
+    assert claude[0] == "@AGENTS.md" or any(text.startswith("Read AGENTS.md first.") for text in claude[:5]), (
+        'CLAUDE.md starts with @AGENTS.md, or says "Read AGENTS.md first." in its first lines'
+    )
     assert read("LICENSE").split("\n")[0].strip() == "MIT License"
     project = table("project")
     assert line(project, r'^license = "MIT"$')
@@ -507,6 +569,75 @@ def test_the_documents():
     assert "package-ecosystem: pip" in dependabot
     assert "package-ecosystem: github-actions" in dependabot
     assert line(dependabot, r"^\s+groups:")
+
+
+# The dot-directories that hold the repository's own files (GitHub's, a site's .well-known/);
+# every other one on disk is a tool's.
+OWN_DOT_DIRS = {".github", ".well-known"}
+
+
+def tracked(root: Path = ROOT) -> list[str]:
+    """The files git tracks, where a work tree is rooted at `root`; otherwise every file on disk
+    outside virtual environments, node_modules and the dot-directories but OWN_DOT_DIRS (a
+    `git archive` extract)."""
+    try:
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root, capture_output=True, text=True)
+        if top.returncode == 0 and Path(top.stdout.strip()).resolve() == root.resolve():
+            out = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=True).stdout
+            return sorted(f for f in out.split("\0") if f)
+    except FileNotFoundError:
+        pass
+    skip = {"node_modules", ".venv", "venv"}
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*")
+        if p.is_file() and not any(part in skip or (part.startswith(".") and part not in OWN_DOT_DIRS) for part in p.relative_to(root).parts[:-1])
+    )
+
+
+def test_the_repository_is_read_off_the_disk_where_it_is_not_a_checkout():
+    """A copy no work tree is rooted in (a `git archive` extract, a ZIP) is read off the disk:
+    the dot-directories the tests read are listed, a tool's are not."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as outer:
+        copy = Path(outer) / "archive"
+        for f in ("pyproject.toml", ".github/workflows/ci.yml", "pkg/static/.well-known/security.txt", ".git/config", ".venv/lib/x.py", "node_modules/pkg/index.js", ".cache/security.txt"):
+            (copy / f).parent.mkdir(parents=True, exist_ok=True)
+            (copy / f).write_text("x\n", encoding="utf-8")
+        assert tracked(copy) == [".github/workflows/ci.yml", "pkg/static/.well-known/security.txt", "pyproject.toml"]
+
+
+def test_the_website_security_txt():
+    """CONVENTIONS.md, "Website": the site says where to report a security problem, and
+    stops saying it once its Expires has passed, so a stale one turns this red."""
+    files = [f for f in tracked() if f == "security.txt" or f.endswith("/security.txt")]
+    assert files, "the site publishes a security.txt, served at /.well-known/security.txt"
+    for file in files:
+        fields = []
+        for text in read(file).split("\n"):
+            if text.strip() == "" or text.startswith("#"):
+                continue
+            m = re.fullmatch(r"([A-Za-z][\w-]*):[ \t]*(\S.*?)\s*", text)
+            assert m, f"{file}: a field is \"Name: value\": {text!r}"
+            fields.append((m.group(1).lower(), m.group(2)))
+        contacts, policy, expires = ([v for k, v in fields if k == name] for name in ("contact", "policy", "expires"))
+        assert contacts, f"{file}: at least one Contact"
+        assert len(expires) == 1, f"{file}: one Expires"
+        assert len(policy) == 1, f"{file}: one Policy"
+        repo = re.match(r"https://github\.com/([\w.-]+/[\w.-]+)/", policy[0])
+        assert repo, f"{file}: the Policy is the repository's SECURITY.md on GitHub"
+        repo = repo.group(1)
+        assert policy[0] == f"https://github.com/{repo}/blob/main/SECURITY.md", f"{file}: the Policy is SECURITY.md on main"
+        form, issues = f"https://github.com/{repo}/security/advisories/new", f"https://github.com/{repo}/issues"
+        assert all(c in (form, issues) for c in contacts) and len(set(contacts)) == len(contacts), (
+            f"{file}: each Contact is the private advisory form or the issues page of the repository the Policy names, once: {contacts}"
+        )
+        assert contacts[-1] == issues, f"{file}: the issues page is a Contact, after the form where there is one"
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})", expires[0]), f"{file}: Expires is an RFC 3339 time"
+        left = (datetime.fromisoformat(expires[0].replace("Z", "+00:00")) - datetime.now(timezone.utc)).total_seconds() / 86400
+        assert left > 0, f"{file}: Expires ({expires[0]}) has passed: renew it, a year ahead at most"
+        assert left <= 366, f"{file}: Expires ({expires[0]}) is more than a year away"
 
 
 def test_gitignore_ends_with_the_secrets_block():

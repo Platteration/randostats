@@ -202,7 +202,10 @@ there is no `_headers`, `.htaccess` or proxy config holding the policy.
   Page and site-file routes answer HEAD (`PAGE_METHODS`); FastAPI's docs routes
   are off.
 - **`security.txt` expires** on the date in `static/security.txt`; the website
-  test fails once it has passed. Renew it a year out.
+  test and the conventions test fail once it has passed. Renew it a year out. Its
+  Contacts are the private report form, then the issues page, for an issue that
+  says only that there is a report while private reporting is switched off
+  (SECURITY.md says the same); both tests hold the order.
 - **No sub-path.** Every address the front end writes is root-absolute, so the
   site runs at the root of its own origin only; the walk runs there.
 

@@ -24,11 +24,13 @@ permissions:
 
 jobs:
   check:
-    # A named release, not ubuntu-latest, which becomes Ubuntu 26.04 from 2026-10-19:
-    # the e2e extra's Playwright 1.56.0 has no Chromium build for 26.04, so its
+    # A named release, the one every job of every workflow names (CONVENTIONS.md, "CI"),
+    # not ubuntu-latest, which becomes Ubuntu 26.04 from 2026-10-19: the e2e extra's
+    # Playwright 1.56.0 has no Chromium build for 26.04, so its
     # `playwright install --with-deps chromium` below would fail there.
     # e2e/test_ci_runner.py asks the pinned Playwright whether it has a build for the
-    # release named here, so raising Playwright, and then the runner, are one change.
+    # release named here, so Playwright is raised first when the runner moves (in every
+    # repository at once, with the conventions test's RUNNER).
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -41,9 +43,9 @@ jobs:
         extras: ["dev", "dev,llm"]
     name: py${{ matrix.python-version }} [${{ matrix.extras }}]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -89,12 +91,12 @@ jobs:
   # them. A version between a floor and the newest release is audited by neither, so an
   # advisory against such a version alone leaves this green.
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: .python-version
           cache: pip
@@ -124,15 +126,15 @@ jobs:
       - run: python .github/audit/floors.py > "$RUNNER_TEMP/floors.txt" && pip-audit -r "$RUNNER_TEMP/floors.txt"
 
   packaged:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     name: non-editable install
     # An editable install reads the data files out of the checkout, so it
     # cannot tell whether the packs and voices are in the built package.
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: .python-version
           cache: pip
@@ -151,7 +153,7 @@ jobs:
 
       # Kept with the run, so a tagged commit's distributions can be taken from its
       # run by hand. Publishing stays a deliberate manual step.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: randostats-dist
           path: dist/*
