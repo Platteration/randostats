@@ -48,6 +48,68 @@ to open the messages behind that number, filtered and searchable. Each person
 keeps the same colour everywhere, assigned once from overall volume so
 filtering never repaints the survivors.
 
+## Quick start
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python samples/make_sample.py        # optional: fake data to play with
+randostats serve                     # http://127.0.0.1:8765
+```
+
+Open the app, go to **Overview** or **Import**, and either click **Load sample data** or import
+your own export (see the help panel on the Import tab for how to export from each app).
+
+You can also import from the terminal:
+
+```bash
+randostats import "WhatsApp Chat with Alex.txt" --me "Your Name"
+randostats import ~/Library/Messages/chat.db --me "Me"
+randostats import telegram-export.zip --me "Your Name"
+randostats counter "seventy percent of people drink beer"
+```
+
+Where to find each export:
+
+| Source | Where |
+|---|---|
+| WhatsApp | a chat → ⋮ → More → Export chat → Without media |
+| iMessage | `~/Library/Messages/chat.db`, with Full Disk Access granted |
+| Android SMS | the "SMS Backup & Restore" app's XML file |
+| Telegram | Desktop → Settings → Advanced → Export Telegram data, JSON |
+| Instagram / Messenger | request your information in JSON, then import the zip |
+| Discord | Settings → Data & Privacy → Request all of my data |
+
+Discord only exports what you wrote, so an import from it shows nothing as
+received. The app says so when it notices, rather than letting you read a
+half-empty chart as a fact about your friends.
+
+The database lives at `data/randostats.db` by default; override with `--db` or
+`RANDOSTATS_DB`. New archive directories are private (0700), and SQLite
+files use 0600 on POSIX systems; existing unrelated parent directories are
+left alone. Restrict any shared parent directory yourself. These permission
+bits do not configure Windows ACLs.
+
+The server accepts loopback Host values and same-origin browser requests by
+default. For intentional phone/LAN use, opt in with an exact client-facing
+name or address, for example:
+
+```bash
+randostats serve --host 0.0.0.0 --allow-host 192.168.1.20
+```
+
+This exposes the whole API, including message reads and deletion. Host and
+Origin checks protect against browser rebinding and cross-site requests;
+they do not authenticate clients. Use a trusted network or an authenticated
+reverse proxy before sharing sensitive archives. Repeat `--allow-host` for
+additional names; wildcards are refused. Proxy requests must preserve the
+client-facing Host and scheme. Upload admission is per server process:
+at most two simultaneous imports, at most the configured upload limit plus
+1 MiB multipart overhead, checked before parsing and while receiving.
+Other request bodies are limited to 1 MiB. Additional workers multiply the
+in-flight limit. Body reception times out after 30 seconds without data or
+five minutes overall; staged request bodies use private temporary files.
+
 ## Counterpoint with Claude (optional)
 
 The rule-based engine works offline and always runs. If you want sharper

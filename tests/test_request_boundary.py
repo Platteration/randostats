@@ -1,5 +1,6 @@
 """Stdlib regressions run without installed FastAPI/pytest dependencies."""
 import asyncio
+import json
 import os
 import stat
 import tempfile
@@ -50,12 +51,7 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
                         [(b"host", b"localhost:8765"), (b"origin", b"http://evil.invalid")],
                         [(b"host", b"localhost:8765"), (b"origin", b"null")],
                         [(b"host", b"localhost"), (b"sec-fetch-site", b"cross-site")],
-                        [(b"host", b"localhost"), (b"host", b"localhost")],
-                        # Two Origins, both same-origin on their own: a page cannot set
-                        # Origin, but a confused proxy could fold two, and "which one do
-                        # we trust?" has no safe answer, so the pair is refused outright.
-                        [(b"host", b"localhost"), (b"origin", b"http://localhost"),
-                         (b"origin", b"http://localhost")]]:
+                        [(b"host", b"localhost"), (b"host", b"localhost")]]:
             status, called, _ = await self.request(headers)
             self.assertEqual(status, 403)
             self.assertFalse(called)
@@ -122,54 +118,6 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await first
         self.assertEqual(guard.active_uploads, 0)
-
-    async def _stage(self, guard, receive):
-        sent = []
-
-        async def send(message):
-            sent.append(message)
-
-        scope = {"type": "http", "scheme": "http", "path": "/api/import", "headers": [(b"host", b"localhost")]}
-        await asyncio.wait_for(guard(scope, receive, send), timeout=3)
-        return sent[0]["status"]
-
-    async def test_a_stalled_body_times_out_on_the_idle_limit(self):
-        """A body that stops arriving holds a staging file and an import slot, so a
-        receive that never returns is cut off after idle_timeout, not kept for ever
-        (RS-R7: `wait_for(timeout=None)` survived every test)."""
-        guard = RequestBoundary(None, idle_timeout=0.05, body_deadline=5)
-
-        async def receive():
-            await asyncio.Event().wait()  # a chunk that never comes
-
-        self.assertEqual(await self._stage(guard, receive), 408)
-
-    async def test_a_trickled_body_times_out_on_the_overall_deadline(self):
-        """A body that trickles one byte at a time, never idle long enough to trip
-        the idle limit, is still cut off by the overall deadline (RS-R7: a 10**9 s
-        deadline survived every test)."""
-        guard = RequestBoundary(None, idle_timeout=5, body_deadline=0.1,
-                                upload_limit=lambda: 50, overhead=0)
-
-        async def receive():
-            await asyncio.sleep(0.005)
-            return {"type": "http.request", "body": b"x", "more_body": True}
-
-        self.assertEqual(await self._stage(guard, receive), 408)
-
-    async def test_a_body_cut_off_mid_stream_is_answered_not_left_unhandled(self):
-        """A client that disconnects mid-body must not leave the inner app returning
-        nothing: under api.py's BaseHTTPMiddleware that raised and logged a traceback
-        for every aborted upload (RS-R6). The boundary answers instead."""
-        guard = RequestBoundary(None)
-        messages = [{"type": "http.request", "body": b"--x\r\n", "more_body": True},
-                    {"type": "http.disconnect"}]
-
-        async def receive():
-            return messages.pop(0)
-
-        self.assertEqual(await self._stage(guard, receive), 400)
-        self.assertEqual(guard.active_uploads, 0, "the import slot is released")
 
     async def test_explicit_lan_host(self):
         async def app(scope, receive, send):

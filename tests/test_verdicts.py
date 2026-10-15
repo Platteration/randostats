@@ -318,7 +318,6 @@ def test_every_voice_can_say_every_new_thing():
 
 @pytest.fixture
 def client(tmp_path):
-    # The app answers only to the names it is reached by; "testserver" is not one.
     with TestClient(create_app(tmp_path / "v.db", use_llm=False), base_url="http://localhost") as c:
         yield c
 

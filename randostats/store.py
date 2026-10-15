@@ -139,10 +139,29 @@ def _create_private(path: Path) -> None:
 class Store:
     def __init__(self, path: Path | str = DEFAULT_DB):
         self.path = Path(path)
-        on_disk = str(self.path) != ":memory:"
-        if on_disk:
-            _make_private_dirs(self.path.parent)
-            _create_private(self.path)
+        if str(self.path) != ":memory:":
+            # Make only newly created archive directories private. Never chmod
+            # unrelated existing parents (e.g. --db ./messages.db).
+            missing = []
+            parent = self.path.parent
+            while not parent.exists():
+                missing.append(parent)
+                parent = parent.parent
+            for directory in reversed(missing):
+                directory.mkdir(mode=0o700, exist_ok=True)
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(self.path, flags, 0o600)
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+            for suffix in ("-journal", "-wal", "-shm"):
+                sidecar = Path(str(self.path) + suffix)
+                if sidecar.is_symlink():
+                    raise ValueError("SQLite sidecar must not be a symlink")
+                if sidecar.exists():
+                    sidecar.chmod(0o600)
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         # The API serves requests from a thread pool and shares one connection.

@@ -25,7 +25,7 @@ from . import auth, google, parsers, stats
 from .counterpoint import Claim, CounterpointEngine, packs as cp_packs
 from .counterpoint import llm
 from .store import DEFAULT_DB, Store
-from .security import LOCAL_HOSTS, MAX_BODY, SAFE_METHODS, RequestBoundary, upload_too_large
+from .security import LOCAL_HOSTS, RequestBoundary
 
 STATIC = Path(__file__).with_name("static")
 
@@ -243,120 +243,10 @@ class CounterRequest(BaseModel):
     llm: bool = True
 
 
-class SignIn(BaseModel):
-    """The sign-in form: a password, and the page to go back to."""
-
-    password: str = Field(max_length=1024)
-    next: str | None = Field(None, max_length=2048)
-
-
-log = logging.getLogger("randostats")
-
-
 def create_app(db_path: Path | str = DEFAULT_DB, use_llm: bool | None = None,
-               allowed_hosts: Sequence[str] | None = None, password: str | None = None,
-               google_config: google.GoogleConfig | None = None, fetch: google.Fetch | None = None) -> FastAPI:
-    """The app. ``password`` and ``google_config`` default to what the environment
-    sets (RANDOSTATS_PASSWORD, and the variables google.read_config reads), and either
-    turns the gate on. ``fetch`` is how the server reaches Google's token endpoint;
-    the tests pass a fake that answers it, and nothing else changes where it goes."""
-    # No /docs, /redoc or /openapi.json: they are not part of the site (the Swagger
-    # page would load its script from a CDN the policy refuses), and the API is
-    # spelled out in this file and in static/app.js.
-    app = FastAPI(title="randostats", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
-    # Host names this server answers to: exact names and addresses, never a
-    # wildcard (`randostats serve --allow-host`); anything else raises here.
-    # The screen runs in the guard below, ahead of the password gate; the same
-    # boundary's body admission runs inside it (see security.py).
-    boundary = {"allowed_hosts": LOCAL_HOSTS if allowed_hosts is None else allowed_hosts,
-                "upload_limit": lambda: MAX_UPLOAD_BYTES, "overhead": MULTIPART_OVERHEAD}
-    screener = RequestBoundary(None, **boundary)
-    screen = screener.screen
-    app.add_middleware(RequestBoundary, **boundary, screened=True)
-    # The password, from the CLI or, for `uvicorn --factory`, the environment. A
-    # password too short to stand on a network is refused here, at start-up.
-    if password is None:
-        password = os.environ.get("RANDOSTATS_PASSWORD") or None
-    # Sign-in with Google, the same way: half set up is refused at start-up, and
-    # so is an address this server would refuse Google's answer at.
-    if google_config is None:
-        google_config = google.read_config(os.environ)
-    if google_config is not None and google_config.hostname not in screener.hosts:
-        raise ValueError(f"{google.APP_URL} names {google_config.hostname}, which this server does not "
-                         f"answer to: serve it with --allow-host {google_config.hostname}")
-    gate = auth.Gate(password) if password is not None or google_config is not None else None
-    signin = google.GoogleSignIn(google_config, fetch=fetch) if google_config is not None else None
-
-    def refuse(request) -> JSONResponse | None:
-        """Why this request must not be answered at all, if it must not."""
-        # The Host, where the browser says the request came from, and the
-        # declared length: the boundary's screen, ahead of everything else.
-        #
-        # A request that names no site at all is treated as first-party, which
-        # is what keeps curl, `randostats import` and any other local script
-        # working. A browser is not obliged to name one: Fetch attaches an
-        # Origin to a GET only when the response tainting is cors, so a
-        # cross-origin `fetch(url, {mode: "no-cors"})` carries none, and a
-        # browser without Fetch Metadata (Firefox < 90, Safari < 16.4) sends
-        # no Sec-Fetch-Site either. On those the cross-site check never fires.
-        # It is therefore the cheap half of the defence, not the whole of it:
-        # what bounds the work a stranger can ask for is that every expensive
-        # view keys its memo on a value this app chose (MAX_ROWS,
-        # GAP_CHOICES, known_contact), which no header can route around.
-        # A cross-site *read* of the JSON API is not something the front end
-        # ever makes, and the page that makes it cannot read the reply either
-        # - there are no CORS headers. It can still make this machine do the
-        # work, and an aggregate view is seconds of CPU on a real corpus, so
-        # a tab left open on any web page could hold a core indefinitely.
-        # So the API is refused to another site whatever the method, and so is
-        # every method that changes something (multipart/form-data needs no
-        # CORS preflight, so /api/import is otherwise reachable from any page).
-        # "/", "/static/*" and "/samples/*" stay open to GET, so a link from
-        # another site, a bookmark or a typed URL still opens the app.
-        problem = screen(request.scope)
-        if problem is not None:
-            status, detail = problem
-            return JSONResponse({"detail": detail}, status_code=status)
-        if gate is None and _beyond_loopback(request):
-            # `randostats serve` will not bind beyond loopback without a password,
-            # but `uvicorn --factory randostats.api:create_app --host 0.0.0.0` can,
-            # and then this is the only thing that knows. A browser on this machine
-            # still reaches it through 127.0.0.1; one across the network does not.
-            return JSONResponse({"detail": "this server is reachable from beyond this machine and has no "
-                                           "password and no sign-in with Google; set RANDOSTATS_PASSWORD"},
-                                status_code=403)
-        return None
-
-    def gatekeep(request) -> JSONResponse | RedirectResponse | None:
-        """With a password set, a request without a session goes no further."""
-        path = request.scope["path"]
-        if gate is None or path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIX):
-            return None
-        if gate.valid(request.cookies.get(auth.COOKIE)):
-            return None
-        if request.method in SAFE_METHODS and not path.startswith("/api/") and _wants_html(request):
-            # A page opened in the browser goes to the sign-in page and comes back.
-            query = request.scope.get("query_string", b"").decode("latin-1")
-            back = auth.local_path(path + (f"?{query}" if query else ""))
-            return RedirectResponse(f"/login?next={quote(back, safe='')}", status_code=303)
-        return JSONResponse({"detail": "sign in first"}, status_code=401)
-
-    def decorate(request, response):
-        """The one policy, on every response this app gives (see CSP above)."""
-        https = request.scope.get("scheme") == "https"
-        response.headers["Content-Security-Policy"] = CSP_HTTPS if https else CSP
-        for name, value in HEADERS.items():
-            response.headers[name] = value
-        if https:
-            # Sent on a plain-http answer it would be ignored, and it is a promise
-            # about the name, so only the TLS endpoint makes it.
-            response.headers["Strict-Transport-Security"] = HSTS
-        # An answer from the API is one person's messages and changes with every
-        # import, so nothing keeps a copy. Everything else is a file whose name
-        # carries no version: revalidated on every use, an unchanged one is a 304.
-        response.headers.setdefault("Cache-Control",
-                                    "no-store" if request.scope["path"].startswith("/api/") else "no-cache")
-        return response
+               allowed_hosts: tuple[str, ...] = LOCAL_HOSTS) -> FastAPI:
+    app = FastAPI(title="randostats", version="0.1.0")
+    app.add_middleware(RequestBoundary, allowed_hosts=allowed_hosts, upload_limit=lambda: MAX_UPLOAD_BYTES)
 
     @app.middleware("http")
     async def security_guard(request, call_next):

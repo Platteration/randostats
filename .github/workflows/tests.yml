@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+        # The llm extra is optional. Test the install the README recommends as
+        # well as the full one, or a test that needs the SDK hides its own
+        # dependency behind CI always having it.
+        extras: ["dev", "dev,llm"]
+    name: py${{ matrix.python-version }} [${{ matrix.extras }}]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[${{ matrix.extras }}]"
+      - name: Run tests
+        run: pytest -q
+      - name: Check the front end parses
+        run: |
+          node --check randostats/static/app.js
+          node --check randostats/static/ui-state.js
+          node --check randostats/static/overview.js
+          node --check randostats/static/m.js
+          node --check randostats/static/m-sw.js

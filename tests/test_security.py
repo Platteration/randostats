@@ -57,7 +57,7 @@ LOCAL = "http://localhost"
 
 @pytest.fixture
 def client(tmp_path):
-    with TestClient(create_app(tmp_path / "sec.db", use_llm=False), base_url=LOCAL) as c:
+    with TestClient(create_app(tmp_path / "sec.db", use_llm=False), base_url="http://localhost") as c:
         yield c
 
 
